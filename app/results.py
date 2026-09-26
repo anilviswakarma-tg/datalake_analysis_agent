@@ -1,5 +1,5 @@
-"""Turning a result DataFrame into what the user sees: chart selection,
-chart rendering, and CSV/Excel export bytes."""
+"""Turning a result DataFrame into what the user sees: chart selection and
+CSV/Excel export bytes. Framework-free; rendering lives in the UI layer."""
 
 from __future__ import annotations
 
@@ -7,12 +7,11 @@ import io
 from typing import Dict, Optional
 
 import pandas as pd
-import streamlit as st
 
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 9. CHART AUTO-SUGGESTION + RENDERING
+# 9. CHART AUTO-SUGGESTION
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _auto_chart_spec(df: pd.DataFrame) -> Optional[Dict[str, str]]:
@@ -58,57 +57,6 @@ def _auto_chart_spec(df: pd.DataFrame) -> Optional[Dict[str, str]]:
         "type": chart_type, "x": x_col, "y": y_col,
         "title": f"{y_col} by {x_col}", "auto": True,
     }
-
-
-def render_chart(df: pd.DataFrame, chart: Dict[str, str]) -> None:
-    import altair as alt
-    chart_type, x, y = chart["type"], chart["x"], chart["y"]
-    title = chart.get("title", "")
-    is_auto = chart.get("auto", False)
-    st.markdown(f"📊 **{title}**" + (" _(auto-generated)_" if is_auto else ""))
-
-    if chart_type in ("bar", "pie"):
-        try:
-            df_plot = df.nlargest(25, y) if pd.api.types.is_numeric_dtype(df[y]) else df.head(25)
-        except Exception:
-            df_plot = df.head(25)
-    else:
-        df_plot = df
-
-    try:
-        if chart_type == "bar":
-            c = alt.Chart(df_plot).mark_bar().encode(
-                x=alt.X(f"{x}:N", sort="-y", title=x),
-                y=alt.Y(f"{y}:Q", title=y),
-                tooltip=list(df_plot.columns),
-            ).properties(height=400)
-        elif chart_type == "line":
-            c = alt.Chart(df_plot).mark_line(point=True).encode(
-                x=alt.X(f"{x}", title=x), y=alt.Y(f"{y}:Q", title=y),
-                tooltip=list(df_plot.columns),
-            ).properties(height=400)
-        elif chart_type == "area":
-            c = alt.Chart(df_plot).mark_area(opacity=0.6).encode(
-                x=alt.X(f"{x}", title=x), y=alt.Y(f"{y}:Q", title=y),
-                tooltip=list(df_plot.columns),
-            ).properties(height=400)
-        elif chart_type == "scatter":
-            c = alt.Chart(df_plot).mark_circle(size=80).encode(
-                x=alt.X(f"{x}:Q", title=x), y=alt.Y(f"{y}:Q", title=y),
-                tooltip=list(df_plot.columns),
-            ).properties(height=400)
-        elif chart_type == "pie":
-            c = alt.Chart(df_plot).mark_arc(innerRadius=60).encode(
-                theta=alt.Theta(f"{y}:Q"),
-                color=alt.Color(f"{x}:N", title=x),
-                tooltip=list(df_plot.columns),
-            ).properties(height=400)
-        else:
-            st.warning(f"Unknown chart type: {chart_type}")
-            return
-        st.altair_chart(c, use_container_width=True)
-    except Exception as e:
-        st.warning(f"Could not render chart: {e}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

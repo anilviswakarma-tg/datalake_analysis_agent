@@ -1,13 +1,20 @@
-"""Mutable per-run state handed from the agent tools to the UI.
+"""Per-run state handed from the agent tools to the UI.
 
-Tools run inside the agent loop with no access to the Streamlit call
-stack, so they deposit results here and the UI collects them after."""
+Tools run inside the agent loop with no access to the UI's call stack, so
+they deposit results on the current RunContext and the UI collects them
+after. The context lives in a ContextVar, not a module global: a global is
+shared by every user of the process, so concurrent questions overwrote each
+other's results, trace and query budget. LangChain copies the context into
+the worker threads it runs tools on, and the RunContext is mutated in place,
+so tool writes are visible to the caller that started the run."""
 
 from __future__ import annotations
 
 import re
 import time
-from typing import Any, Dict
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -19,26 +26,55 @@ from results import _auto_chart_spec
 # 3. RUN STATE (UI handoff)
 # ═══════════════════════════════════════════════════════════════════════════
 
-_LAST_RESULT: Dict[str, Any] = {
-    "dataframe": None,
-    "query_id": None,
-    "trace": [],
-    "chart": None,
-    "notices": [],
-}
+DEFAULT_MODEL_CHOICE = "glm"
 
 
-def _reset_run_state() -> None:
-    _LAST_RESULT["dataframe"] = None
-    _LAST_RESULT["query_id"] = None
-    _LAST_RESULT["trace"] = []
-    _LAST_RESULT["chart"] = None
-    _LAST_RESULT["notices"] = []
-    _LAST_RESULT["executed_sql"] = []
+@dataclass
+class RunContext:
+    """Everything one question's run reads (inputs) and writes (results)."""
+    # Inputs, set by the UI when the run starts
+    question: str = ""
+    model_choice: str = DEFAULT_MODEL_CHOICE
+    execute_live: bool = True
+    # Results, written by tools during the run
+    dataframe: Optional[pd.DataFrame] = None
+    query_id: Optional[str] = None
+    chart: Optional[Dict[str, Any]] = None
+    trace: List[Dict[str, Any]] = field(default_factory=list)
+    notices: List[str] = field(default_factory=list)
+    executed_sql: List[str] = field(default_factory=list)
+
+
+_CURRENT_RUN: ContextVar[RunContext] = ContextVar("current_run")
+
+
+def start_run(question: str = "", model_choice: str = DEFAULT_MODEL_CHOICE,
+              execute_live: bool = True) -> RunContext:
+    """Begin a fresh run in the current context and return it. Call once per
+    question, before the agent is built or streamed."""
+    ctx = RunContext(question=question, model_choice=model_choice,
+                     execute_live=execute_live)
+    _CURRENT_RUN.set(ctx)
+    return ctx
+
+
+def current_run() -> RunContext:
+    """The active run. Raises if none was started: silently creating one here
+    would let tool results land somewhere the UI never looks."""
+    try:
+        return _CURRENT_RUN.get()
+    except LookupError:
+        raise RuntimeError("No active run - call run_state.start_run() first.") from None
+
+
+def active_run() -> Optional[RunContext]:
+    """The active run, or None outside one. For readers that have a sensible
+    default (e.g. which model to use) rather than results to deposit."""
+    return _CURRENT_RUN.get(None)
 
 
 def _record(tool_name: str, summary: str) -> None:
-    _LAST_RESULT["trace"].append({
+    current_run().trace.append({
         "tool": tool_name,
         "summary": summary,
         "ts": time.time(),
@@ -46,16 +82,18 @@ def _record(tool_name: str, summary: str) -> None:
 
 
 def _stash_result(df: pd.DataFrame) -> None:
-    _LAST_RESULT["dataframe"] = df
-    _LAST_RESULT["query_id"] = df.attrs.get("query_id")
+    ctx = current_run()
+    ctx.dataframe = df
+    ctx.query_id = df.attrs.get("query_id")
     auto_chart = _auto_chart_spec(df)
-    if auto_chart and _LAST_RESULT.get("chart") is None:
-        _LAST_RESULT["chart"] = auto_chart
+    if auto_chart and ctx.chart is None:
+        ctx.chart = auto_chart
 
 
 def _add_notice(text: str) -> None:
-    if text not in _LAST_RESULT["notices"]:
-        _LAST_RESULT["notices"].append(text)
+    notices = current_run().notices
+    if text not in notices:
+        notices.append(text)
 
 
 # ── Loop guards ──────────────────────────────────────────────────────────────
@@ -107,7 +145,7 @@ def check_query_allowed(sql: str):
             "the pattern further and do NOT exclude bad matches with NOT IN."
         )
 
-    executed = _LAST_RESULT.setdefault("executed_sql", [])
+    executed = current_run().executed_sql
     if _normalise_sql(sql) in executed:
         return (
             "DUPLICATE QUERY - you already ran this exact SQL in this turn and "
@@ -130,8 +168,8 @@ def check_query_allowed(sql: str):
 def record_query(sql: str) -> None:
     """Book a query against this run's budget, before it executes so that a
     failing query still counts and cannot be retried indefinitely."""
-    _LAST_RESULT.setdefault("executed_sql", []).append(_normalise_sql(sql))
+    current_run().executed_sql.append(_normalise_sql(sql))
 
 
 def queries_run() -> int:
-    return len(_LAST_RESULT.get("executed_sql", []))
+    return len(current_run().executed_sql)

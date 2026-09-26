@@ -3,10 +3,8 @@ entity resolution, SQL validation and execution, and UI affordances."""
 
 from __future__ import annotations
 
-import os
 from typing import List
 
-import streamlit as st
 from botocore.exceptions import BotoCoreError, ClientError
 from langchain_core.tools import tool
 
@@ -16,8 +14,8 @@ from config import DATA_DICT_DIR, VALID_DOMAINS, _known_databases
 from entities import _fuzzy_match, _load_groups, _load_musicowners
 from knowledge import (_append_feedback, _data_dict_index, _data_dict_preamble,
                        _normalise_table_name)
-from run_state import (_LAST_RESULT, _add_notice, _record, _stash_result,
-                       check_query_allowed, record_query)
+from run_state import (_add_notice, _record, _stash_result, check_query_allowed,
+                       current_run, record_query)
 
 
 
@@ -115,13 +113,7 @@ def capture_finding(domain: str, observation: str) -> str:
     if d not in VALID_DOMAINS and d != "other":
         d = "other"
     try:
-        # Pull the originating question from session state if available
-        q = None
-        try:
-            q = st.session_state.get("current_question")
-        except Exception:
-            pass
-        _append_feedback(d, observation, q)
+        _append_feedback(d, observation, current_run().question or None)
         _record("capture_finding", f"📝 recorded ({d}): {observation[:60]}...")
         return "Recorded. A reviewer will see this in feedback.md."
     except Exception as e:
@@ -416,8 +408,7 @@ def sql_db_query(query: str) -> str:
         _record("sql_db_query", "\U0001f6d1 blocked: " + blocked.split(" - ")[0].split("\n")[0])
         return blocked
 
-    execute_live = os.getenv("EXECUTE_LIVE", "true").lower() == "true"
-    if not execute_live:
+    if not current_run().execute_live:
         _record("sql_db_query", "⏭️ skipped (live off)")
         return ("EXECUTION SKIPPED: 'Execute against Athena' toggled off. "
                 "Return the SQL to the user without running it.")
@@ -462,7 +453,8 @@ def visualize_results(chart_type: str, x_column: str, y_column: str, title: str 
       y_column: Y axis column (or values for pie)
       title: short title
     """
-    df = _LAST_RESULT.get("dataframe")
+    run = current_run()
+    df = run.dataframe
     if df is None or len(df) == 0:
         return "No data to visualize."
     if x_column not in df.columns:
@@ -473,7 +465,7 @@ def visualize_results(chart_type: str, x_column: str, y_column: str, title: str 
     if chart_type not in valid:
         return f"Invalid chart_type {chart_type!r}. Use one of: {valid}"
 
-    _LAST_RESULT["chart"] = {
+    run.chart = {
         "type": chart_type, "x": x_column, "y": y_column,
         "title": title or f"{y_column} by {x_column}",
     }

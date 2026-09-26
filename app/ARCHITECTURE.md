@@ -13,11 +13,11 @@ rule is what keeps the graph acyclic, and `tests/test_wiring.py` enforces it.
 |---|---|---|
 | `config.py` | ~90 | Environment defaults, filesystem paths, database-name accessors. Imports nothing else here. |
 | `aws.py` | ~160 | boto3 sessions and clients, credential retry, the Athena query executor, S3 result fetch. The only module that talks to AWS. |
-| `results.py` | ~125 | Chart selection and rendering (Altair), CSV/Excel export bytes. |
-| `run_state.py` | ~55 | The mutable handoff from agent tools to the UI. |
+| `results.py` | ~80 | Chart selection, CSV/Excel export bytes. Framework-free; rendering is in the UI layer. |
+| `run_state.py` | ~150 | The per-run context (inputs + results) handed from agent tools to the UI, and the loop guards. |
 | `knowledge.py` | ~170 | Reading the data dictionary, `domain_rules.md` and `feedback.md`. |
 | `entities.py` | ~90 | Resolving names ("Sony", "Etisalat") to `owner_id` / `group_id`. |
-| `models.py` | ~120 | Model registry, Bedrock Mantle SigV4 auth, the active-model choice. |
+| `models.py` | ~385 | Model registry, Bedrock Mantle SigV4 auth, content normalisers. |
 | `prompt.py` | ~165 | The agent system prompt. |
 | `tools.py` | ~510 | The 13 tools the agent can call. |
 | `agent.py` | ~40 | Assembles model + tools + prompt into the LangChain agent. |
@@ -28,14 +28,17 @@ rule is what keeps the graph acyclic, and `tests/test_wiring.py` enforces it.
 ### Why the boundaries fall where they do
 
 - **`run_state.py` is separate** because agent tools execute inside the agent
-  loop with no access to the Streamlit call stack. They deposit results in a
-  module-level dict; the UI collects them once the run finishes. Isolating
-  that shared mutable state makes the coupling visible rather than incidental.
+  loop with no access to the UI's call stack. The UI calls `start_run()` with
+  the question, model and live flag; tools read those and deposit results on
+  the returned `RunContext`. It lives in a `ContextVar`, never a module global
+  or `os.environ`, so concurrent users can't overwrite each other.
+  `tests/test_run_state.py` proves tool writes survive LangGraph's worker
+  threads, sync and async.
 - **`models.py` is split from `agent.py`** to break a cycle: `agent` needs the
   tool list, and `tools.sql_db_query_checker` needs to build an LLM with the
   user's selected model. Both depend on `models`, and neither on the other.
-  The choice is shared through `set_active_model()` / `build_active_llm()`
-  rather than a cross-module global, which does not work.
+  The choice is read from the run context via `active_model_choice()` /
+  `build_active_llm()`, so the agent and the checker can't disagree.
 - **`config.py` imports nothing** from this package, so every other module can
   depend on it freely.
 

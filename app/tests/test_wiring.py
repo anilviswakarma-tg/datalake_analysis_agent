@@ -52,9 +52,10 @@ def test_sql_checker_uses_the_selected_model():
     # @tool wraps the function in a StructuredTool; .func is the original.
     src = inspect.getsource(tools_mod.sql_db_query_checker.func)
     assert "models.build_active_llm()" in src
-    models.set_active_model("deepseek")
-    assert models._ACTIVE_MODEL_CHOICE == "deepseek"
-    models.set_active_model("glm")
+    import run_state
+    run_state.start_run(model_choice="deepseek")
+    assert models.active_model_choice() == "deepseek"
+    run_state.start_run(model_choice="glm")
 
 
 def test_prompt_puts_the_dictionary_first():
@@ -195,7 +196,8 @@ def test_quota_and_auth_failures_get_actionable_messages(monkeypatch):
     """"Please try again" is wrong advice for a quota error (retrying cannot
     help until the window resets) and for an auth error (it never will)."""
     import models
-    monkeypatch.setattr(models, "_ACTIVE_MODEL_CHOICE", "gemini")
+    import run_state
+    run_state.start_run(model_choice="gemini")
 
     quota = models.explain_failure(Exception(
         "429 RESOURCE_EXHAUSTED ... Quota exceeded ... limit: 20, model: "
@@ -299,10 +301,11 @@ def test_active_normalizer_follows_the_sidebar_selection(monkeypatch):
     Gemini answer renders as a repr while Gemini is selected."""
     import models
     import ui
-    monkeypatch.setattr(models, "_ACTIVE_MODEL_CHOICE", "gemini")
+    import run_state
+    run_state.start_run(model_choice="gemini")
     assert isinstance(ui.active_normalizer(), ui.GeminiNormalizer)
     assert ui.message_text([{"type": "text", "text": "ok"}]) == "ok"
-    monkeypatch.setattr(models, "_ACTIVE_MODEL_CHOICE", "glm")
+    run_state.start_run(model_choice="glm")
     assert isinstance(ui.active_normalizer(), ui.PassthroughNormalizer)
     assert ui.message_text("ok") == "ok"
 

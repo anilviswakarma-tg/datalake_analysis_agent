@@ -16,6 +16,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 
 from aws import _session
+from run_state import DEFAULT_MODEL_CHOICE, active_run
 
 
 
@@ -179,15 +180,16 @@ def explain_failure(exc: Exception) -> str | None:
     """
     msg = str(exc)
     low = msg.lower()
-    cfg = _MODEL_REGISTRY.get(_ACTIVE_MODEL_CHOICE) or {}
-    name = cfg.get("label", _ACTIVE_MODEL_CHOICE)
+    choice = active_model_choice()
+    cfg = _MODEL_REGISTRY.get(choice) or {}
+    name = cfg.get("label", choice)
     # Only suggest alternatives that are actually configured — offering a model
     # whose own key is missing just sends the user round the same loop. A
     # Bedrock entry's IAM permissions can't be checked without calling it, so
     # those are always listed.
     others = ", ".join(
         model_label(k) for k in _MODEL_REGISTRY
-        if k != _ACTIVE_MODEL_CHOICE and missing_key_reason(k) is None
+        if k != choice and missing_key_reason(k) is None
     ) or "none are currently configured"
 
     if "resource_exhausted" in low or "429" in msg or "quota" in low or "rate limit" in low:
@@ -236,22 +238,18 @@ def missing_key_reason(model_choice: str) -> str | None:
     return None
 
 
-# Tracks the currently-selected model so tools that spin up their own LLM
-# (e.g. sql_db_query_checker) honour the sidebar choice instead of always
-# defaulting to OpenAI. Set by build_agent() on each run.
-_ACTIVE_MODEL_CHOICE = "glm"
-
-
-def set_active_model(model_choice: str) -> None:
-    """Record the sidebar selection so tools that build their own LLM
-    (the SQL checker) use the same model as the agent."""
-    global _ACTIVE_MODEL_CHOICE
-    _ACTIVE_MODEL_CHOICE = model_choice
+def active_model_choice() -> str:
+    """The model selected for the current run, so tools that spin up their own
+    LLM (e.g. sql_db_query_checker) honour the user's choice instead of always
+    defaulting to OpenAI. Read from the run context, not a module global, so
+    two users on different models can't swap each other's choice."""
+    run = active_run()
+    return run.model_choice if run else DEFAULT_MODEL_CHOICE
 
 
 def build_active_llm():
     """A chat model for the currently-selected choice."""
-    return _build_llm(_ACTIVE_MODEL_CHOICE)
+    return _build_llm(active_model_choice())
 
 
 def _build_llm(model_choice: str):
@@ -376,7 +374,7 @@ def normalizer_for(provider: str | None) -> ContentNormalizer:
 
 def active_normalizer() -> ContentNormalizer:
     """The normaliser for the model currently selected in the sidebar."""
-    cfg = _MODEL_REGISTRY.get(_ACTIVE_MODEL_CHOICE) or {}
+    cfg = _MODEL_REGISTRY.get(active_model_choice()) or {}
     return normalizer_for(cfg.get("provider"))
 
 

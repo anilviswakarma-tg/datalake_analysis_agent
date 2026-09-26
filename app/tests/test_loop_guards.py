@@ -15,9 +15,8 @@ import run_state
 
 @pytest.fixture(autouse=True)
 def fresh_run():
-    run_state._reset_run_state()
+    run_state.start_run()
     yield
-    run_state._reset_run_state()
 
 
 # The exact patterns the agent cycled through during the incident.
@@ -89,7 +88,7 @@ def test_budget_resets_between_questions():
     for i in range(run_state.MAX_QUERIES_PER_RUN):
         run_state.record_query(f"SELECT {i} FROM t")
     assert run_state.check_query_allowed("SELECT new FROM t") is not None
-    run_state._reset_run_state()
+    run_state.start_run()
     assert run_state.check_query_allowed("SELECT new FROM t") is None
     assert run_state.queries_run() == 0
 

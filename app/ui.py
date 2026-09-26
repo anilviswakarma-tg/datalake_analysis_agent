@@ -7,6 +7,7 @@ import base64
 import functools
 import io
 import os
+from typing import Dict
 
 import pandas as pd
 import streamlit as st
@@ -19,7 +20,7 @@ from models import (ContentNormalizer, GeminiNormalizer,  # noqa: F401
                     normalizer_for)
 from aws import _fetch_s3_csv
 from config import LOGO_FILE, SCRIPT_DIR
-from results import df_to_csv_bytes, df_to_excel_bytes, render_chart
+from results import df_to_csv_bytes, df_to_excel_bytes
 
 
 
@@ -119,6 +120,57 @@ def _current_runs() -> list:
 def _clear_current_runs() -> None:
     """Reset just the active agent's conversation."""
     st.session_state.setdefault("runs_by_agent", {})[_runs_bucket_key()] = []
+
+
+def render_chart(df: pd.DataFrame, chart: Dict[str, str]) -> None:
+    import altair as alt
+    chart_type, x, y = chart["type"], chart["x"], chart["y"]
+    title = chart.get("title", "")
+    is_auto = chart.get("auto", False)
+    st.markdown(f"📊 **{title}**" + (" _(auto-generated)_" if is_auto else ""))
+
+    if chart_type in ("bar", "pie"):
+        try:
+            df_plot = df.nlargest(25, y) if pd.api.types.is_numeric_dtype(df[y]) else df.head(25)
+        except Exception:
+            df_plot = df.head(25)
+    else:
+        df_plot = df
+
+    try:
+        if chart_type == "bar":
+            c = alt.Chart(df_plot).mark_bar().encode(
+                x=alt.X(f"{x}:N", sort="-y", title=x),
+                y=alt.Y(f"{y}:Q", title=y),
+                tooltip=list(df_plot.columns),
+            ).properties(height=400)
+        elif chart_type == "line":
+            c = alt.Chart(df_plot).mark_line(point=True).encode(
+                x=alt.X(f"{x}", title=x), y=alt.Y(f"{y}:Q", title=y),
+                tooltip=list(df_plot.columns),
+            ).properties(height=400)
+        elif chart_type == "area":
+            c = alt.Chart(df_plot).mark_area(opacity=0.6).encode(
+                x=alt.X(f"{x}", title=x), y=alt.Y(f"{y}:Q", title=y),
+                tooltip=list(df_plot.columns),
+            ).properties(height=400)
+        elif chart_type == "scatter":
+            c = alt.Chart(df_plot).mark_circle(size=80).encode(
+                x=alt.X(f"{x}:Q", title=x), y=alt.Y(f"{y}:Q", title=y),
+                tooltip=list(df_plot.columns),
+            ).properties(height=400)
+        elif chart_type == "pie":
+            c = alt.Chart(df_plot).mark_arc(innerRadius=60).encode(
+                theta=alt.Theta(f"{y}:Q"),
+                color=alt.Color(f"{x}:N", title=x),
+                tooltip=list(df_plot.columns),
+            ).properties(height=400)
+        else:
+            st.warning(f"Unknown chart type: {chart_type}")
+            return
+        st.altair_chart(c, use_container_width=True)
+    except Exception as e:
+        st.warning(f"Could not render chart: {e}")
 
 
 # App-wide styling for the authenticated pages (matches apis-playground).

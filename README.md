@@ -70,11 +70,6 @@ See [app/knowledge/README.md](app/knowledge/README.md) before editing it.
 
 ## Known issues
 
-- **No per-session state.** `run_state._LAST_RESULT` is a single process-wide
-  dict, so concurrent users overwrite each other's results, trace and
-  loop-guard budget. Fix this before any multi-user deployment, and before the
-  Chainlit migration in the roadmap — Chainlit is async, which turns an
-  occasional race into the normal case.
 - **`AWS_PROFILE` is popped unconditionally** at `app.py:50`, so a local run
   can't use a named profile even when `.env` sets one. It should only fire on
   EC2.

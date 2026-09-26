@@ -15,9 +15,11 @@ from tools import (capture_finding, count_rows, describe_table,
 
 
 
-def build_agent(model_choice: str = "glm"):
-    models.set_active_model(model_choice)
-    model = _build_llm(model_choice)
+def build_agent():
+    """Build the agent for the current run's selected model. The model comes
+    from the run context (run_state.start_run), the same place the SQL checker
+    reads it, so the two can never disagree."""
+    model = _build_llm(models.active_model_choice())
     tools = [
         # Knowledge
         get_data_dictionary,

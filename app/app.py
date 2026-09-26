@@ -20,7 +20,7 @@ from config import DATA_DICT_DIR, FEEDBACK_FILE, _openai_key_looks_real
 from entities import _ENTITY_CACHE
 from models import (_MODEL_REGISTRY, explain_failure, missing_key_reason,
                     model_label)
-from run_state import _LAST_RESULT, _reset_run_state
+from run_state import start_run
 from ui import (_AGENTS, _clear_current_runs, _current_runs, _friendly_status,
                 _inject_css, _logo_data_uri, _render_answer, message_text)
 
@@ -72,7 +72,7 @@ def main():
         )
 
     # Settings menu is developer-only; end users never see it. Default to live
-    # execution so hiding the menu can't leave EXECUTE_LIVE unset.
+    # execution so hiding the menu can't leave dry-run switched on.
     execute_live = True
     if dev_mode:
         with tc4:
@@ -101,8 +101,6 @@ def main():
                 )
                 if fb_ok and st.button("📖 View feedback.md (admin)", use_container_width=True):
                     st.session_state.show_feedback = True
-    os.environ["EXECUTE_LIVE"] = "true" if execute_live else "false"
-
     st.divider()
 
     # ── Sidebar: agent navigation (playground-style) ────────────────────────
@@ -277,8 +275,10 @@ def main():
             st.error("ATHENA_OUTPUT_S3 is not configured — set it in .env.")
             st.stop()
 
-        _reset_run_state()
-        st.session_state.current_question = question  # for feedback entries
+        # Per-run context: this user's question, model and live flag, and the
+        # slot the tools write results into. Never a process-wide global.
+        run_ctx = start_run(question=question, model_choice=model_choice,
+                            execute_live=execute_live)
 
         with st.chat_message("user"):
             st.markdown(question)
@@ -289,7 +289,7 @@ def main():
                 expanded=dev_mode,
             ) as status:
                 try:
-                    agent = build_agent(model_choice=st.session_state.get("model_choice", "glm"))
+                    agent = build_agent()
                     all_messages = []
                     final_answer = "(no answer)"
                     _streamed: list[str] = []
@@ -360,11 +360,11 @@ def main():
                     runs.append({
                         "question": question,
                         "answer": final_answer,
-                        "dataframe": _LAST_RESULT["dataframe"],
-                        "query_id": _LAST_RESULT["query_id"],
-                        "trace": list(_LAST_RESULT["trace"]),
-                        "chart": _LAST_RESULT["chart"],
-                        "notices": list(_LAST_RESULT["notices"]),
+                        "dataframe": run_ctx.dataframe,
+                        "query_id": run_ctx.query_id,
+                        "trace": list(run_ctx.trace),
+                        "chart": run_ctx.chart,
+                        "notices": list(run_ctx.notices),
                         "messages": all_messages,
                     })
                     st.rerun()
