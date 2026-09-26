@@ -14,7 +14,7 @@ Records which tracks are currently active for which store — `(track_id, group_
 | `group_id` | Identifies the store/client |
 | `track_id` | FK → `mastermusic.id` |
 | `country` | Country the row applies to |
-| `active` | Whether the track is currently active for this store. String type, not boolean — for ETEG, only value observed is `'Y'` (no `'N'`/inactive rows seen); verify before assuming this holds for other groups or before comparing with `=`/`CASE WHEN` as a boolean |
+| `active` | Always `'Y'` — a track that isn't active for a store has no row. Checked 2026-09-26: all 1,244,031,758 rows across 61 groups. **Don't filter on it**; it removes nothing and only lengthens the query |
 | `allow_stream` / `allow_sale` | Per-track permission flags for this store |
 | `date_updated` | Last update timestamp |
 
@@ -27,7 +27,7 @@ Use this table **alone**. No join, no extra filtering:
 ```sql
 SELECT COUNT(DISTINCT track_id) AS active_catalogue_size
 FROM "tg-deltalake-bronze"."track_active"
-WHERE group_id = '<store>' AND active = 'Y'
+WHERE group_id = '<store>'
 ```
 
 **Never join `mastermusic` to apply `status = 1`.** That rule is scoped to
@@ -55,7 +55,7 @@ JOIN "tg-deltalake-bronze".mastermusic mm
   ON ta.track_id = mm.id AND mm.dw_stock_type = 'track'
 WHERE ta.group_id = '<group>'
   AND mm.owner_id = '<owner>'
-  AND ta.active = 'Y' AND ta.allow_stream = 'Y'
+  AND ta.allow_stream = 'Y'
 ```
 
 Add `ta.country` when the question is territory-specific — a track can be active in one country and not another, so an unqualified count is the union across territories and will exceed any single country's figure.

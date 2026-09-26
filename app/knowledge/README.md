@@ -7,6 +7,7 @@ This folder holds the **business knowledge** the agent uses to write SQL.
 | `data-dictionary/` | **Authoritative** per-table reference: what each table and column *means* | Data team, in `reporting-deltalake` — **not here** |
 | `dictionary_gaps.md` | Historical review queue from the `domain_rules.md` migration — see below | Humans, on review |
 | `feedback.md` | Observations the agent recorded during real queries | Agent (append) → Human review |
+| `UPSTREAM_PENDING.md` | Local dictionary edits still to be made in `reporting-deltalake` | Humans, until upstreamed |
 
 ## How the agent uses these files
 
@@ -39,7 +40,13 @@ When the agent learns something useful, it calls `capture_finding(...)`, which a
 
 A **vendored copy** of `reporting-deltalake/docs/data-dictionary` (currently commit `20b253f`, 2026-09-23), where it is maintained by the data team and scoped deliberately to data meaning — no ingestion detail, job names or code paths.
 
-**Don't hand-edit these files here.** Edits belong upstream in `reporting-deltalake`; anything changed locally is lost on the next refresh and silently diverges in the meantime. To refresh:
+**Don't hand-edit these files here.** Edits belong upstream in `reporting-deltalake`; anything changed locally is lost on the next refresh and silently diverges in the meantime.
+
+> ⚠️ **The copy has local edits that aren't upstream yet** — see
+> [UPSTREAM_PENDING.md](UPSTREAM_PENDING.md). Read it before refreshing: the
+> command below deletes them.
+
+To refresh:
 
 ```bash
 cp ../../reporting-deltalake/docs/data-dictionary/*.md app/knowledge/data-dictionary/

@@ -194,6 +194,17 @@ def test_store_catalogue_rule_lives_in_the_dictionary():
     assert "METADATA, never filtering" in text
 
 
+def test_nobody_teaches_the_agent_to_filter_track_active_on_active():
+    """`active` is 'Y' on every track_active row (1.24B rows, 61 groups,
+    2026-09-26) - absence of a row is what means inactive. An example that
+    filters on it gets copied into every generated query."""
+    import prompt
+    from config import DATA_DICT_DIR
+    doc = (DATA_DICT_DIR / "track_active.md").read_text(encoding="utf-8")
+    for source, text in (("prompt", prompt._build_system_prompt()), ("track_active.md", doc)):
+        assert "active = 'Y'" not in text, source
+
+
 def test_quota_and_auth_failures_get_actionable_messages(monkeypatch):
     """"Please try again" is wrong advice for a quota error (retrying cannot
     help until the window resets) and for an auth error (it never will)."""

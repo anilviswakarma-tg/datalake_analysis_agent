@@ -168,7 +168,9 @@ STEP 11: Capture (optional)
 - STORE CATALOGUE: "active catalogue size for store X" and any "what does
   store X carry/stream/see" question is answered by track_active ALONE:
   SELECT COUNT(DISTINCT track_id) FROM track_active
-  WHERE group_id = '<store>' AND active = 'Y'.
+  WHERE group_id = '<store>'.
+  Do NOT filter on track_active.active: every row is 'Y' (a track that is not
+  active has no row), so the filter never removes anything.
   A row exists in track_active only AFTER the platform has applied every
   availability check, so re-applying them downstream cannot add correctness.
   NEVER join mastermusic to add status = 1 or any other filter to a
