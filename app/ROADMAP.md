@@ -149,6 +149,39 @@ docs rather than taken on trust:
 **Effort:** days, not weeks — but do Phase 1 first so users stop losing work
 while this is in progress.
 
+### Status (2026-09-26) — built alongside Streamlit, not yet deployed
+
+`chainlit_app.py` on Chainlit 2.12.0, checked end to end in a browser against
+live Athena. The prerequisite is done: run state is a per-run `ContextVar`
+(`run_state.start_run`), not a process global.
+
+Answers to the checks above:
+
+- **Landing page → profiles + starters: yes.** One chat profile per agent plus
+  a default "General", each with its questions as `ChatProfile(starters=...)`.
+  (`@cl.set_starters` can't see the selected profile, so starters live on the
+  profile.) Switching profile starts a new chat, which replaces the per-agent
+  conversation buckets.
+- **Branding: colours, logo, favicon yes; layout no.** `public/theme.json`
+  (HSL variables) and `public/logo_*.png`. The hero/tile layout of the
+  Streamlit landing page is not reproducible without a custom frontend build.
+- **Tables and downloads: native.** `cl.Dataframe`, `cl.File`. Charts moved
+  from Altair to Plotly (`results.plotly_figure`), since Chainlit has no Vega.
+- **Auth: matches.** Password callback (domain + `APP_PASSWORD`), Google
+  OAuth callback when `OAUTH_GOOGLE_CLIENT_ID` is set (domain checked in the
+  callback — Chainlit doesn't send Google's `hd` hint), and the dev bypass as a
+  header-auth callback behind the same container gate. The 24-hour expiry is
+  `user_session_timeout`; no JavaScript timer.
+- **Data layer: not wired yet.** `SQLAlchemyDataLayer` needs its DDL run by
+  hand (Chainlit creates no tables), is only documented for Postgres, and
+  writes thread tags as a list SQLite can't store (`auto_tag_thread` is off
+  for this reason). Elements (tables, charts, files) are only persisted with a
+  storage provider (S3). Phase 1's rehydrate-from-S3 design still applies.
+
+Remaining before Streamlit can be removed: chat history (the above), the
+deploy files (`Dockerfile`, `docker-compose.yml` still run Streamlit), and
+restricting `allow_origins` in `.chainlit/config.toml` to the real host.
+
 ---
 
 ## 3. Optional: a Slack entry point

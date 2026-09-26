@@ -4,6 +4,9 @@
 
 # Web UI
 streamlit>=1.40.0
+# Chainlit replaces Streamlit (ROADMAP phase 2); both ship until it's retired.
+# 2.12.0 is the floor: earlier releases carry the MCP CVE-2026-45018/45019.
+chainlit>=2.12.0
 
 # LangChain — create_agent (1.0+)
 langchain>=1.0.0
@@ -30,8 +33,9 @@ numpy>=1.24.0
 # Excel export
 openpyxl>=3.1.0
 
-# Charts
+# Charts (Altair for Streamlit, Plotly for Chainlit)
 altair>=5.0.0
+plotly>=5.20.0
 
 # Environment variables (for local .env support)
 python-dotenv>=1.0.0

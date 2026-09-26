@@ -14,6 +14,7 @@ from config import DATA_DICT_DIR, VALID_DOMAINS, _known_databases
 from entities import _fuzzy_match, _load_groups, _load_musicowners
 from knowledge import (_append_feedback, _data_dict_index, _data_dict_preamble,
                        _normalise_table_name)
+from results import CHART_TYPES
 from run_state import (_add_notice, _record, _stash_result, check_query_allowed,
                        current_run, record_query)
 
@@ -461,9 +462,8 @@ def visualize_results(chart_type: str, x_column: str, y_column: str, title: str 
         return f"Column {x_column!r} not in results. Available: {list(df.columns)}"
     if y_column not in df.columns:
         return f"Column {y_column!r} not in results. Available: {list(df.columns)}"
-    valid = {"bar", "line", "pie", "scatter", "area"}
-    if chart_type not in valid:
-        return f"Invalid chart_type {chart_type!r}. Use one of: {valid}"
+    if chart_type not in CHART_TYPES:
+        return f"Invalid chart_type {chart_type!r}. Use one of: {list(CHART_TYPES)}"
 
     run.chart = {
         "type": chart_type, "x": x_column, "y": y_column,
@@ -483,3 +483,20 @@ def note_default_applied(notice: str) -> str:
     _add_notice(notice)
     _record("note_default_applied", notice[:80])
     return f"Notice recorded: {notice}"
+
+
+# ---- Progress text for end users ----
+
+def friendly_status(tool_name: str) -> str:
+    """A non-technical progress line for end users (dev mode off), keyed
+    loosely off the tool name so it still reflects what the agent is doing."""
+    t = (tool_name or "").lower()
+    if "checker" in t:
+        return "Double-checking the query…"
+    if "schema" in t or "list" in t or "info" in t or "table" in t:
+        return "Exploring the data catalogue…"
+    if "entity" in t or "resolve" in t or "lookup" in t or "match" in t or "name" in t:
+        return "Looking up the right names…"
+    if "sql" in t or "query" in t or "execute" in t or "athena" in t:
+        return "Running the query and gathering results…"
+    return "Working on your question…"

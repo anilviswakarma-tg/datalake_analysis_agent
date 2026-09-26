@@ -12,9 +12,18 @@ Forked from `DataLakeAgent` on 2026-09-26 to be developed independently.
 cd app
 python -m venv .venv
 ./.venv/Scripts/python.exe -m pip install -r requirements.txt -r requirements-dev.txt
-./.venv/Scripts/python.exe -m pytest          # 124 tests, ~35s
-./.venv/Scripts/streamlit.exe run app.py
+./.venv/Scripts/python.exe -m pytest          # ~165 tests, ~40s
+
+# Chainlit UI (the replacement - see ROADMAP phase 2)
+./.venv/Scripts/chainlit.exe run chainlit_app.py -w      # http://localhost:8000
+
+# Streamlit UI (being retired)
+./.venv/Scripts/streamlit.exe run app.py                 # http://localhost:8501
 ```
+
+Chainlit needs `CHAINLIT_AUTH_SECRET` in `.env` (generate one with
+`./.venv/Scripts/chainlit.exe create-secret`). With `DEV_SKIP_AUTH=true` it
+signs you in automatically on a dev machine, as the Streamlit app does.
 
 On macOS/Linux use `.venv/bin/python` instead of `.venv/Scripts/python.exe`.
 
@@ -40,6 +49,8 @@ Modules are listed in dependency order; each may only import ones above it.
 | Module | Role |
 |---|---|
 | `config.py` | env defaults, paths |
+| `access.py` | allowed domain, password check, dev-bypass gate |
+| `catalogue.py` | the four agents and their suggested questions |
 | `aws.py` | boto3 sessions, Athena execution |
 | `results.py` | dataframe → chart / CSV / Excel |
 | `run_state.py` | per-run result handoff and loop guards |
@@ -49,7 +60,11 @@ Modules are listed in dependency order; each may only import ones above it.
 | `prompt.py` | the system prompt — **all agent behaviour rules** |
 | `tools.py` | the agent's tools |
 | `agent.py` | wires model + tools + prompt |
-| `ui.py`, `auth.py`, `app.py` | Streamlit layer |
+| `ui.py`, `auth.py`, `app.py` | Streamlit layer (being retired) |
+| `chainlit_app.py` | Chainlit layer — auth callbacks, profiles, the streamed run |
+
+`access.py` (sign-in rules) and `catalogue.py` (the four agents and their
+suggested questions) sit at the top of the order and are shared by both UIs.
 
 See [app/ARCHITECTURE.md](app/ARCHITECTURE.md) for detail and
 [app/ROADMAP.md](app/ROADMAP.md) for planned work.
@@ -71,10 +86,11 @@ See [app/knowledge/README.md](app/knowledge/README.md) before editing it.
 ## Known issues
 
 - **`AWS_PROFILE` is popped unconditionally** at `app.py:50`, so a local run
-  can't use a named profile even when `.env` sets one. It should only fire on
-  EC2.
+  of the Streamlit app can't use a named profile even when `.env` sets one.
+  `chainlit_app.py` only pops it inside a container.
 - `st.components.v1.html`, used for the session-expiry timer, was slated for
-  removal after 2026-06-01.
+  removal after 2026-06-01. (Streamlit only; Chainlit expires the session
+  cookie itself.)
 
 ## What was left behind in the fork
 

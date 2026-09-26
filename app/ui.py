@@ -19,8 +19,10 @@ from models import (ContentNormalizer, GeminiNormalizer,  # noqa: F401
                     PassthroughNormalizer, active_normalizer, message_text,
                     normalizer_for)
 from aws import _fetch_s3_csv
+from catalogue import AGENT_KEYS, AGENTS
 from config import LOGO_FILE, SCRIPT_DIR
-from results import df_to_csv_bytes, df_to_excel_bytes
+from tools import friendly_status as _friendly_status  # noqa: F401
+from results import chart_frame, df_to_csv_bytes, df_to_excel_bytes
 
 
 
@@ -50,52 +52,8 @@ def _inject_css(name: str) -> None:
 
 
 # ── Domain "agents" shown in the sidebar, each with suggested questions ──────
-_AGENTS = [
-    {
-        "key": "catalogue",
-        "icon": ":material/library_music:",
-        "label": "Master catalogue agent",
-        "desc": "Track & product counts by label, territory and ingestion date.",
-        "questions": [
-            "How many tracks do we have from Sony?",
-            "How many tracks do we have for China?",
-            "How many products were ingested last week?",
-        ],
-    },
-    {
-        "key": "playlogs",
-        "icon": ":material/play_circle:",
-        "label": "Logs and Streams agent",
-        "desc": "Play and fetch log volumes by client and time period.",
-        "questions": [
-            "How many play logs did we get from Etisalat last week?",
-            "How many fetch logs did we get from Realize?",
-        ],
-    },
-    {
-        "key": "users",
-        "icon": ":material/group:",
-        "label": "Users and Subscriptions agent",
-        "desc": "New users, subscriptions and playlist counts per client.",
-        "questions": [
-            "How many subscriptions were added to Gabb last week?",
-            "How many new users were added to Etisalat last week?",
-            "How many user playlists do we have for Gabb?",
-        ],
-    },
-    {
-        "key": "client_active",
-        "icon": ":material/album:",
-        "label": "Client catalogue agent",
-        "desc": "Active catalogue sizes and label breakdowns per client.",
-        "questions": [
-            "How many active tracks do we have for Gabb?",
-            "How many Orchard tracks are active in Etisalat?",
-        ],
-    },
-]
-
-_AGENT_KEYS = {a["key"] for a in _AGENTS}
+_AGENTS = AGENTS
+_AGENT_KEYS = AGENT_KEYS
 
 # Chat runs are scoped per agent so switching agents in the sidebar shows only
 # that agent's conversation (and each agent's follow-up context stays its own).
@@ -129,13 +87,7 @@ def render_chart(df: pd.DataFrame, chart: Dict[str, str]) -> None:
     is_auto = chart.get("auto", False)
     st.markdown(f"📊 **{title}**" + (" _(auto-generated)_" if is_auto else ""))
 
-    if chart_type in ("bar", "pie"):
-        try:
-            df_plot = df.nlargest(25, y) if pd.api.types.is_numeric_dtype(df[y]) else df.head(25)
-        except Exception:
-            df_plot = df.head(25)
-    else:
-        df_plot = df
+    df_plot = chart_frame(df, chart)
 
     try:
         if chart_type == "bar":
@@ -171,22 +123,6 @@ def render_chart(df: pd.DataFrame, chart: Dict[str, str]) -> None:
         st.altair_chart(c, use_container_width=True)
     except Exception as e:
         st.warning(f"Could not render chart: {e}")
-
-
-# App-wide styling for the authenticated pages (matches apis-playground).
-def _friendly_status(tool_name: str) -> str:
-    """A non-technical progress line for end users (developer mode off), keyed
-    loosely off the tool name so it still reflects what the agent is doing."""
-    t = (tool_name or "").lower()
-    if "checker" in t:
-        return "Double-checking the query…"
-    if "schema" in t or "list" in t or "info" in t or "table" in t:
-        return "Exploring the data catalogue…"
-    if "entity" in t or "resolve" in t or "lookup" in t or "match" in t or "name" in t:
-        return "Looking up the right names…"
-    if "sql" in t or "query" in t or "execute" in t or "athena" in t:
-        return "Running the query and gathering results…"
-    return "Working on your question…"
 
 
 def _render_answer(run: dict, i: int, dev: bool) -> None:

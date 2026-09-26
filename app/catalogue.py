@@ -1,0 +1,59 @@
+"""The domain "agents" offered on the landing page, each with suggested
+questions. Framework-free: the UI decides how to present them.
+
+All four share one underlying agent and prompt; the split is a way into the
+data for non-technical users, and keeps each agent's conversation separate.
+"""
+
+from __future__ import annotations
+
+AGENTS = [
+    {
+        "key": "catalogue",
+        "icon": ":material/library_music:",   # Streamlit Material icon
+        "lucide": "library",                   # Chainlit (Lucide) icon
+        "label": "Master catalogue agent",
+        "desc": "Track & product counts by label, territory and ingestion date.",
+        "questions": [
+            "How many tracks do we have from Sony?",
+            "How many tracks do we have for China?",
+            "How many products were ingested last week?",
+        ],
+    },
+    {
+        "key": "playlogs",
+        "icon": ":material/play_circle:",
+        "lucide": "circle-play",
+        "label": "Logs and Streams agent",
+        "desc": "Play and fetch log volumes by client and time period.",
+        "questions": [
+            "How many play logs did we get from Etisalat last week?",
+            "How many fetch logs did we get from Realize?",
+        ],
+    },
+    {
+        "key": "users",
+        "icon": ":material/group:",
+        "lucide": "users",
+        "label": "Users and Subscriptions agent",
+        "desc": "New users, subscriptions and playlist counts per client.",
+        "questions": [
+            "How many subscriptions were added to Gabb last week?",
+            "How many new users were added to Etisalat last week?",
+            "How many user playlists do we have for Gabb?",
+        ],
+    },
+    {
+        "key": "client_active",
+        "icon": ":material/album:",
+        "lucide": "disc-3",
+        "label": "Client catalogue agent",
+        "desc": "Active catalogue sizes and label breakdowns per client.",
+        "questions": [
+            "How many active tracks do we have for Gabb?",
+            "How many Orchard tracks are active in Etisalat?",
+        ],
+    },
+]
+
+AGENT_KEYS = {a["key"] for a in AGENTS}

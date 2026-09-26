@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import os
 import time
-from pathlib import Path
 
 import streamlit as st
 
+from access import ALLOWED_DOMAIN as _ALLOWED_DOMAIN
+from access import SESSION_TTL_SECONDS as _SESSION_TTL
+from access import in_container as _in_container
 from ui import _inject_css, _logo_data_uri
 
 
@@ -16,29 +18,6 @@ from ui import _inject_css, _logo_data_uri
 # ═══════════════════════════════════════════════════════════════════════════
 # 11. STREAMLIT UI
 # ═══════════════════════════════════════════════════════════════════════════
-
-_ALLOWED_DOMAIN = "tunedglobal.com"
-
-
-def _in_container() -> bool:
-    """True when running inside Docker.
-
-    This app is ALWAYS containerised when deployed (docker-compose on EC2) and
-    NEVER containerised during local development (bare `streamlit run`), which
-    makes this a reliable "am I on a server" signal. Used to refuse the dev
-    auth bypass even if DEV_SKIP_AUTH somehow reaches a deployed .env — e.g.
-    someone copying their local .env onto the box.
-    """
-    try:
-        if Path("/.dockerenv").exists():
-            return True
-    except OSError:
-        pass
-    try:
-        return "docker" in Path("/proc/1/cgroup").read_text(encoding="utf-8")
-    except OSError:
-        return False
-
 
 def _auth_configured() -> bool:
     """True when Google OIDC login is configured in .streamlit/secrets.toml.
@@ -99,7 +78,6 @@ def _check_auth() -> None:
             )
             return
 
-    _SESSION_TTL = 24 * 60 * 60  # 24 hours in seconds
     if st.session_state.get("authenticated"):
         login_time = st.session_state.get("login_time", 0)
         if time.time() - login_time > _SESSION_TTL:

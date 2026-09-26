@@ -10,8 +10,10 @@ import pytest
 
 # Dependency order: each module may only import ones listed before it.
 MODULE_ORDER = [
-    "config", "aws", "results", "run_state", "knowledge", "entities",
-    "models", "prompt", "tools", "agent", "ui", "auth", "app",
+    "config", "access", "catalogue", "aws", "results", "run_state", "knowledge",
+    "entities", "models", "prompt", "tools", "agent",
+    # UI layers - each depends on everything above, never on each other
+    "ui", "auth", "app", "chainlit_app",
 ]
 
 

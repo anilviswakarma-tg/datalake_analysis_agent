@@ -1,8 +1,9 @@
 # Architecture
 
-A Streamlit app that turns plain-English questions into AWS Athena SQL, runs
-them, and shows the results. Entry point is `app.py`; run it with
-`streamlit run app.py`.
+An app that turns plain-English questions into AWS Athena SQL, runs them, and
+shows the results. Two UIs share everything below them: `chainlit_app.py`
+(`chainlit run chainlit_app.py`), which is replacing `app.py`
+(`streamlit run app.py`).
 
 ## Modules
 
@@ -12,6 +13,8 @@ rule is what keeps the graph acyclic, and `tests/test_wiring.py` enforces it.
 | Module | Lines | Responsibility |
 |---|---|---|
 | `config.py` | ~90 | Environment defaults, filesystem paths, database-name accessors. Imports nothing else here. |
+| `access.py` | ~65 | Sign-in rules: allowed domain, shared password, session TTL, container-gated dev bypass. |
+| `catalogue.py` | ~65 | The four landing-page agents and their suggested questions. |
 | `aws.py` | ~160 | boto3 sessions and clients, credential retry, the Athena query executor, S3 result fetch. The only module that talks to AWS. |
 | `results.py` | ~80 | Chart selection, CSV/Excel export bytes. Framework-free; rendering is in the UI layer. |
 | `run_state.py` | ~150 | The per-run context (inputs + results) handed from agent tools to the UI, and the loop guards. |
@@ -23,7 +26,8 @@ rule is what keeps the graph acyclic, and `tests/test_wiring.py` enforces it.
 | `agent.py` | ~40 | Assembles model + tools + prompt into the LangChain agent. |
 | `ui.py` | ~205 | Styling, the agent catalogue, conversation buckets, rendering a run. |
 | `auth.py` | ~195 | Login screen, SSO/password paths, session expiry, dev bypass. |
-| `app.py` | ~360 | Page composition and the agent run loop. Entry point. |
+| `app.py` | ~360 | Streamlit page composition and run loop. Being retired. |
+| `chainlit_app.py` | ~430 | Chainlit auth callbacks, chat profiles, model picker, streamed run. Entry point. |
 
 ### Why the boundaries fall where they do
 

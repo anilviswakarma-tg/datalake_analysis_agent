@@ -1,0 +1,428 @@
+"""Tuned Global Data Lake Agent - Chainlit entry point.
+
+Run with:  chainlit run chainlit_app.py
+
+Everything below the UI - agent, tools, run context, AWS, knowledge - is
+shared with the Streamlit app and framework-free. This file maps it onto
+Chainlit: auth callbacks, chat profiles for the four agents, the model
+picker, and the streamed agent run."""
+
+from __future__ import annotations
+
+import io
+import logging
+import os
+from typing import Any, Dict, List, Optional
+
+import chainlit as cl
+import pandas as pd
+from chainlit.input_widget import Switch
+from chainlit.utils import utc_now
+
+import access
+from agent import build_agent
+from aws import _fetch_s3_csv
+from catalogue import AGENTS
+from config import DATA_DICT_DIR, FEEDBACK_FILE, _openai_key_looks_real
+from entities import _ENTITY_CACHE
+from models import (_MODEL_REGISTRY, explain_failure, message_text,
+                    missing_key_reason, model_label)
+from results import df_to_csv_bytes, df_to_excel_bytes, plotly_figure
+from run_state import DEFAULT_MODEL_CHOICE, RunContext, start_run
+from tools import friendly_status
+
+log = logging.getLogger(__name__)
+
+# Deployed containers use the instance IAM role; a stray AWS_PROFILE there
+# names a profile that doesn't exist and breaks credential resolution. Only
+# drop it in a container, so a local run can still use a named profile.
+if access.in_container():
+    os.environ.pop("AWS_PROFILE", None)
+
+GENERAL_PROFILE = "General"
+MAX_HISTORY = 6          # previous exchanges sent back to the model
+RECURSION_LIMIT = 40     # last line of defence; run_state's query budget trips first
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AUTH
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _user(email: str, method: str) -> cl.User:
+    return cl.User(identifier=email.strip().lower(), metadata={"auth_method": method})
+
+
+@cl.password_auth_callback
+async def password_auth(username: str, password: str) -> Optional[cl.User]:
+    """Shared-password login: a @tunedglobal.com email plus APP_PASSWORD."""
+    if access.password_login_ok(username, password):
+        return _user(username, "password")
+    return None
+
+
+if os.getenv("OAUTH_GOOGLE_CLIENT_ID"):
+    # Registered only when configured: Chainlit refuses to start with an
+    # oauth_callback and no provider.
+    @cl.oauth_callback
+    async def oauth_login(provider_id: str, token: str, raw_user_data: Dict[str, str],
+                          default_user: cl.User,
+                          id_token: Optional[str] = None) -> Optional[cl.User]:
+        # id_token defaults to None: some provider routes pass 4 arguments.
+        email = raw_user_data.get("email", "")
+        if (provider_id == "google" and raw_user_data.get("email_verified", False)
+                and access.email_allowed(email)):
+            return _user(email, "google")
+        return None     # sends the user to Chainlit's sign-in error page
+
+
+if access.dev_bypass_requested():
+    if access.in_container():
+        log.error("DEV_SKIP_AUTH is set on a containerised (deployed) host. "
+                  "Ignoring it and requiring normal sign-in. Remove it from "
+                  "the server's .env.")
+    else:
+        # LOCAL DEV ONLY. Header auth signs the browser in without a login
+        # form. access.dev_bypass_email() re-checks the container gate on
+        # every call, so this can't sign anyone in on a server.
+        @cl.header_auth_callback
+        async def dev_bypass(headers) -> Optional[cl.User]:
+            email = access.dev_bypass_email()
+            return _user(email, "dev-bypass") if email else None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PROFILES, MODEL PICKER, SETTINGS
+# ═══════════════════════════════════════════════════════════════════════════
+
+@cl.set_chat_profiles
+async def chat_profiles(current_user: Optional[cl.User], language: Optional[str] = None):
+    """One profile per agent, each with its suggested questions as starters.
+    Switching profile starts a new chat, so each agent's conversation (and the
+    history sent to the model) stays its own."""
+    general = cl.ChatProfile(
+        name=GENERAL_PROFILE,
+        markdown_description="Ask your data lake anything - catalogue, plays, "
+                             "users or store metrics.",
+        default=True,
+        starters=[cl.Starter(label=a["questions"][0], message=a["questions"][0])
+                  for a in AGENTS],
+    )
+    return [general] + [
+        cl.ChatProfile(
+            name=a["label"],
+            markdown_description=a["desc"],
+            starters=[cl.Starter(label=q, message=q) for q in a["questions"]],
+        )
+        for a in AGENTS
+    ]
+
+
+def _model_mode() -> cl.Mode:
+    """The model picker, shown in the message composer."""
+    return cl.Mode(id="model", name="Model", options=[
+        cl.ModeOption(id=key, name=model_label(key), default=(key == DEFAULT_MODEL_CHOICE))
+        for key in _MODEL_REGISTRY
+    ])
+
+
+async def _send_settings() -> Dict[str, Any]:
+    return await cl.ChatSettings([
+        Switch(id="dev_mode", label="Dev mode", initial=False,
+               description="Show the agent's tool calls, SQL and query ids, "
+                           "and the developer commands."),
+        Switch(id="execute_live", label="Execute against Athena", initial=True,
+               description="Dev mode only. Off = generate SQL without running it (dry-run)."),
+    ]).send()
+
+
+# Developer commands, offered in the composer while dev mode is on.
+_DEV_COMMANDS = [
+    {"id": "clear-entity-cache", "icon": "refresh-cw", "button": False,
+     "description": "Refresh label/client lookups from tg-master. Rarely needed."},
+    {"id": "view-feedback", "icon": "book-open", "button": False,
+     "description": "Show knowledge/feedback.md (the agent's captured findings)."},
+]
+
+
+def _settings() -> Dict[str, Any]:
+    return cl.user_session.get("settings") or {}
+
+
+def _dev_mode() -> bool:
+    return bool(_settings().get("dev_mode"))
+
+
+def _execute_live() -> bool:
+    # Dry-run is a developer setting; with dev mode off, always run live so a
+    # hidden toggle can't leave a user silently in dry-run.
+    return bool(_settings().get("execute_live", True)) if _dev_mode() else True
+
+
+@cl.on_chat_start
+async def on_chat_start():
+    cl.user_session.set("history", [])
+    cl.user_session.set("settings", await _send_settings())
+    await cl.context.emitter.set_modes([_model_mode()])
+
+    # Toasts, not messages: a message would hide the starters.
+    user = cl.user_session.get("user")
+    if user and (user.metadata or {}).get("auth_method") == "dev-bypass":
+        await cl.context.emitter.send_toast(
+            "Auth bypassed - DEV_SKIP_AUTH=true is set. Local development only.",
+            type="warning")
+    if not DATA_DICT_DIR.exists() or not any(DATA_DICT_DIR.glob("*.md")):
+        await cl.context.emitter.send_toast(
+            f"Data dictionary missing or empty ({DATA_DICT_DIR}). Answers will be "
+            "far less reliable.", type="error")
+
+
+@cl.on_settings_update
+async def on_settings_update(settings: Dict[str, Any]):
+    cl.user_session.set("settings", settings)
+    await cl.context.emitter.set_commands(_DEV_COMMANDS if _dev_mode() else [])
+    if _dev_mode() and not _execute_live():
+        await cl.context.emitter.send_toast(
+            "Dry-run mode - the agent will generate SQL but not execute it.",
+            type="warning")
+
+
+async def _run_command(command: str) -> None:
+    if not _dev_mode():
+        return
+    if command == "clear-entity-cache":
+        _ENTITY_CACHE.clear()
+        await cl.context.emitter.send_toast("Entity cache cleared.", type="success")
+    elif command == "view-feedback":
+        text = (FEEDBACK_FILE.read_text(encoding="utf-8") if FEEDBACK_FILE.exists()
+                else "_feedback.md does not exist yet._")
+        await cl.Message(content=f"**knowledge/feedback.md**\n\n{text}").send()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# THE AGENT RUN
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _selected_model(message: cl.Message) -> str:
+    choice = (message.modes or {}).get("model") or DEFAULT_MODEL_CHOICE
+    return choice if choice in _MODEL_REGISTRY else DEFAULT_MODEL_CHOICE
+
+
+def _preflight_problem(model_choice: str, execute_live: bool) -> Optional[str]:
+    """A setup problem to report instead of running, else None. Checks for a
+    *usable* key, not merely a non-empty one: the .env.example placeholder
+    would otherwise fail much later as a raw 401 that reads like an app bug."""
+    if (_MODEL_REGISTRY[model_choice].get("provider") == "openai"
+            and not _openai_key_looks_real()):
+        return ("OpenAI API key not configured - set a real `OPENAI_API_KEY` in "
+                "`.env` (the placeholder value doesn't work), then restart the app.")
+    if (problem := missing_key_reason(model_choice)) is not None:
+        return problem
+    if execute_live and not os.getenv("ATHENA_OUTPUT_S3"):
+        return "ATHENA_OUTPUT_S3 is not configured - set it in `.env`."
+    return None
+
+
+def _history_messages(question: str) -> List[Dict[str, str]]:
+    messages: List[Dict[str, str]] = []
+    for prev in (cl.user_session.get("history") or [])[-MAX_HISTORY:]:
+        messages.append({"role": "user", "content": prev["question"]})
+        messages.append({"role": "assistant", "content": prev["answer"]})
+    messages.append({"role": "user", "content": question})
+    return messages
+
+
+async def _stream_agent(messages: List[Dict[str, str]], dev: bool):
+    """Run the agent, streaming its tokens into a message and its tool calls
+    into steps. Returns (final answer text, the message to finish).
+
+    Text the model streams before a tool call is preamble ("Let me check...").
+    It is dropped when the tool call starts, and a fresh message takes the
+    tokens that follow, so the answer always renders below the steps."""
+    agent = build_agent()
+    answer = cl.Message(content="")
+    # A Message picks up its parent from Chainlit's step context; a bare Step
+    # does not, and the UI nests children under their parent while appending
+    # parentless items at the end. So steps take the answer's parent, making
+    # them siblings that render in the order they happen.
+    parent_id = answer.parent_id
+    final_answer = "(no answer)"
+    tool_steps: Dict[str, cl.Step] = {}
+    closed: set = set()
+
+    # End users get one step whose label tracks progress in plain words;
+    # dev mode gets a step per tool call, with arguments and output.
+    progress: Optional[cl.Step] = None
+    if not dev:
+        progress = cl.Step(name="Working on your question…", type="run",
+                           show_input=False, parent_id=parent_id)
+        progress.start = utc_now()
+        await progress.send()
+
+    try:
+        async for mode, data in agent.astream(
+            {"messages": messages},
+            config={"recursion_limit": RECURSION_LIMIT},
+            stream_mode=["values", "messages"],
+        ):
+            if mode == "values":
+                msgs = data.get("messages", [])
+                if not msgs:
+                    continue
+                last = msgs[-1]
+                tool_calls = getattr(last, "tool_calls", None) or []
+                if tool_calls and answer.content:
+                    await answer.remove()
+                    answer = cl.Message(content="")
+                for tc in tool_calls:
+                    if tc["id"] in tool_steps:
+                        continue
+                    if dev:
+                        step = cl.Step(name=tc["name"], type="tool", show_input="json",
+                                       parent_id=parent_id)
+                        step.input = tc.get("args", {})
+                        step.start = utc_now()
+                        await step.send()
+                        tool_steps[tc["id"]] = step
+                    else:
+                        tool_steps[tc["id"]] = progress
+                        progress.name = friendly_status(tc["name"])
+                        await progress.update()
+                if dev:
+                    for m in msgs:
+                        tc_id = getattr(m, "tool_call_id", None)
+                        if (getattr(m, "type", None) == "tool" and tc_id in tool_steps
+                                and tc_id not in closed):
+                            step = tool_steps[tc_id]
+                            step.output = message_text(m.content)[:4000]
+                            step.end = utc_now()
+                            await step.update()
+                            closed.add(tc_id)
+                if getattr(last, "type", None) == "ai" and not tool_calls:
+                    # Not `.content` directly: the native Google client returns
+                    # a list of typed blocks, which would render as a repr.
+                    final_answer = message_text(last.content)
+
+            elif mode == "messages":
+                chunk, meta = data
+                # Only the agent's own model node. The SQL checker tool makes
+                # its own LLM call, whose tokens would otherwise stream into
+                # the answer as raw SQL.
+                if meta.get("langgraph_node") != "model":
+                    continue
+                if getattr(chunk, "tool_calls", None) or getattr(chunk, "tool_call_chunks", None):
+                    continue
+                if getattr(chunk, "type", "") != "AIMessageChunk":
+                    continue
+                # Flatten first: Gemini streams lists of typed blocks.
+                if text := message_text(getattr(chunk, "content", "")):
+                    await answer.stream_token(text)
+    except BaseException:
+        if answer.content:
+            await answer.remove()
+        raise
+    finally:
+        if progress is not None:
+            await progress.remove()
+
+    return final_answer, answer
+
+
+async def _result_parts(ctx: RunContext, dev: bool):
+    """Notices, caption lines and elements for a finished run's results."""
+    elements: List[cl.Element] = []
+    captions: List[str] = []
+    df = ctx.dataframe
+    if df is None:
+        return elements, captions
+
+    if ctx.chart:
+        try:
+            label = ctx.chart.get("title", "chart") + (" (auto-generated)" if ctx.chart.get("auto") else "")
+            elements.append(cl.Plotly(name=label, figure=plotly_figure(df, ctx.chart),
+                                      display="inline", size="large"))
+        except Exception as e:           # a bad chart must not lose the answer
+            captions.append(f"⚠️ Could not render chart: {e}")
+
+    # Single-row results (COUNT, SUM, scalar aggregates): the answer text
+    # already gives the number, so no table and no downloads.
+    if len(df) <= 1:
+        return elements, captions
+
+    elements.append(cl.Dataframe(name="Results", data=df, display="inline"))
+
+    query_id = ctx.query_id
+    s3_csv: bytes = await cl.make_async(_fetch_s3_csv)(query_id) if query_id else b""
+    total_rows = max(s3_csv.count(b"\n") - 1, len(df)) if s3_csv else len(df)
+
+    def excel_bytes() -> bytes:
+        if s3_csv:
+            try:
+                return df_to_excel_bytes(pd.read_csv(io.BytesIO(s3_csv)))
+            except Exception:
+                pass
+        return df_to_excel_bytes(df)
+
+    stem = f"datalake_{query_id or 'results'}"
+    elements.append(cl.File(name=f"{stem}.csv", content=s3_csv or df_to_csv_bytes(df),
+                            mime="text/csv", display="inline"))
+    elements.append(cl.File(
+        name=f"{stem}.xlsx", content=await cl.make_async(excel_bytes)(),
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        display="inline"))
+
+    if total_rows > len(df):
+        captions.append(f"⚠️ Showing first {len(df):,} of {total_rows:,} rows - "
+                        "CSV and Excel contain the full dataset.")
+    if dev and query_id:
+        s3_base = os.getenv("ATHENA_OUTPUT_S3", "")
+        captions.append(f"{total_rows:,} rows · query id `{query_id}`"
+                        + (f" · `{s3_base}{query_id}.csv`" if s3_base else ""))
+    else:
+        captions.append(f"{total_rows:,} rows")
+    return elements, captions
+
+
+def _failure_text(e: Exception, dev: bool) -> str:
+    # A quota or auth failure has a specific remedy; "try again" is wrong
+    # advice for both.
+    if explained := explain_failure(e):
+        return explained + (f"\n\nRaw error: `{e}`" if dev else "")
+    if dev:
+        return f"Agent failed: {e}"
+    return ("Sorry - something went wrong while answering. "
+            "Please try again or rephrase your question.")
+
+
+@cl.on_message
+async def on_message(message: cl.Message):
+    if message.command:
+        await _run_command(message.command)
+        return
+    question = (message.content or "").strip()
+    if not question:
+        return
+
+    dev, live = _dev_mode(), _execute_live()
+    model_choice = _selected_model(message)
+    if problem := _preflight_problem(model_choice, live):
+        await cl.Message(content=f"⚠️ {problem}").send()
+        return
+
+    # This user's question, model and live flag, and the slot the tools write
+    # results into. Scoped to this task's context, never process-wide.
+    ctx = start_run(question=question, model_choice=model_choice, execute_live=live)
+    try:
+        final_answer, answer = await _stream_agent(_history_messages(question), dev)
+    except Exception as e:
+        log.exception("agent run failed")
+        await cl.Message(content=_failure_text(e, dev)).send()
+        return
+
+    elements, captions = await _result_parts(ctx, dev)
+    notices = "\n".join(f"> ℹ️ {n}" for n in ctx.notices)
+    answer.content = "\n\n".join(p for p in (
+        notices, final_answer, "\n".join(f"_{c}_" for c in captions)) if p)
+    answer.elements = elements
+    await answer.send()
+
+    cl.user_session.get("history").append({"question": question, "answer": final_answer})

@@ -59,6 +59,54 @@ def _auto_chart_spec(df: pd.DataFrame) -> Optional[Dict[str, str]]:
     }
 
 
+CHART_TYPES = ("bar", "line", "pie", "scatter", "area")
+# Tuned Global orange first; pie slices cycle through the rest.
+CHART_COLORS = ["#E85420", "#F0A07F", "#8C8C8C", "#C8C8C8", "#5A5A5A", "#B8401A"]
+
+
+def chart_frame(df: pd.DataFrame, chart: Dict[str, str]) -> pd.DataFrame:
+    """The rows a chart plots: bar and pie keep the 25 largest, so a long tail
+    doesn't turn the chart into noise; other types plot everything."""
+    y = chart["y"]
+    if chart["type"] in ("bar", "pie"):
+        try:
+            return df.nlargest(25, y) if pd.api.types.is_numeric_dtype(df[y]) else df.head(25)
+        except Exception:
+            return df.head(25)
+    return df
+
+
+def plotly_figure(df: pd.DataFrame, chart: Dict[str, str]):
+    """A Plotly figure for a chart spec (from _auto_chart_spec or the
+    visualize_results tool). Raises ValueError for an unknown chart type."""
+    import plotly.express as px
+
+    chart_type, x, y = chart["type"], chart["x"], chart["y"]
+    data = chart_frame(df, chart)
+    # Plotly Express colours traces when it builds them, so the palette has
+    # to go in here; a later layout colorway would not repaint them.
+    common = dict(title=chart.get("title", ""), color_discrete_sequence=CHART_COLORS)
+    if chart_type == "bar":
+        fig = px.bar(data, x=x, y=y, **common)
+        fig.update_xaxes(type="category", categoryorder="total descending")
+    elif chart_type == "line":
+        fig = px.line(data, x=x, y=y, markers=True, **common)
+    elif chart_type == "area":
+        fig = px.area(data, x=x, y=y, **common)
+    elif chart_type == "scatter":
+        fig = px.scatter(data, x=x, y=y, **common)
+    elif chart_type == "pie":
+        fig = px.pie(data, names=x, values=y, hole=0.4, **common)
+    else:
+        raise ValueError(f"Unknown chart type: {chart_type}")
+    fig.update_layout(
+        template="plotly_dark", height=400,
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        margin=dict(l=40, r=20, t=50, b=40),
+    )
+    return fig
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 10. EXPORT HELPERS
 # ═══════════════════════════════════════════════════════════════════════════

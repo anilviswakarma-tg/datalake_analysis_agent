@@ -1,0 +1,5 @@
+/* Tuned Global tweaks on top of public/theme.json. Chainlit's class names are
+   not a stable API, so keep this file small and re-check it after upgrades. */
+
+/* Internal, non-technical audience: hide the framework watermark. */
+a[href*="chainlit.io"] { display: none !important; }
