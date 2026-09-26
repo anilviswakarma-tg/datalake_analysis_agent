@@ -172,15 +172,18 @@ Answers to the checks above:
   callback — Chainlit doesn't send Google's `hd` hint), and the dev bypass as a
   header-auth callback behind the same container gate. The 24-hour expiry is
   `user_session_timeout`; no JavaScript timer.
-- **Data layer: not wired yet.** `SQLAlchemyDataLayer` needs its DDL run by
-  hand (Chainlit creates no tables), is only documented for Postgres, and
-  writes thread tags as a list SQLite can't store (`auto_tag_thread` is off
-  for this reason). Elements (tables, charts, files) are only persisted with a
-  storage provider (S3). Phase 1's rehydrate-from-S3 design still applies.
+- **Data layer: done, database-agnostic (2026-09-26).** SQLite on a Docker
+  volume for now, selected by `CHAT_DB_URL`; moving to Postgres is a URL
+  change. The stock `SQLAlchemyDataLayer` silently dropped user messages and
+  thread metadata on SQLite and Chainlit's DDL misses `autoCollapse` — see
+  `chainlit_data.py` and `chat_store.py`. Results are rebuilt on resume from
+  a snapshot saved with each answer, so no blob store is needed — Phase 1's
+  design, implemented.
 
-Remaining before Streamlit can be removed: chat history (the above), the
-deploy files (`Dockerfile`, `docker-compose.yml` still run Streamlit), and
-restricting `allow_origins` in `.chainlit/config.toml` to the real host.
+Remaining before Streamlit can be removed: make Chainlit the `Dockerfile`
+default (`docker-compose.yml` now runs both, Chainlit on 8000 with the
+`data/` volume), and restrict `allow_origins` in `.chainlit/config.toml` to
+the real host.
 
 ---
 

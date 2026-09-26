@@ -15,20 +15,23 @@ import os
 from typing import Any, Dict, List, Optional
 
 import chainlit as cl
+from chainlit.config import config as cl_config
 import pandas as pd
 from chainlit.input_widget import Switch
 from chainlit.utils import utc_now
 
 import access
+import chat_store
 from agent import build_agent
 from aws import _fetch_s3_csv
 from catalogue import AGENTS
+from chainlit_data import build_data_layer
 from config import DATA_DICT_DIR, FEEDBACK_FILE, _openai_key_looks_real
 from entities import _ENTITY_CACHE
 from models import (_MODEL_REGISTRY, explain_failure, message_text,
                     missing_key_reason, model_label)
 from results import df_to_csv_bytes, df_to_excel_bytes, plotly_figure
-from run_state import DEFAULT_MODEL_CHOICE, RunContext, start_run
+from run_state import DEFAULT_MODEL_CHOICE, start_run
 from tools import friendly_status
 
 log = logging.getLogger(__name__)
@@ -88,6 +91,24 @@ if access.dev_bypass_requested():
         async def dev_bypass(headers) -> Optional[cl.User]:
             email = access.dev_bypass_email()
             return _user(email, "dev-bypass") if email else None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CHAT HISTORY
+# ═══════════════════════════════════════════════════════════════════════════
+# Which database is chat_store's business (CHAT_DB_URL); nothing below knows
+# or cares whether it is SQLite or Postgres. CHAT_DB_URL=off disables history.
+
+CHAT_DB_URL = chat_store.chat_db_url()
+
+if CHAT_DB_URL:
+    @cl.on_app_startup
+    async def create_history_schema():
+        await chat_store.ensure_schema(CHAT_DB_URL)
+
+    @cl.data_layer
+    def history_data_layer():
+        return build_data_layer(CHAT_DB_URL)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -158,11 +179,15 @@ def _execute_live() -> bool:
     return bool(_settings().get("execute_live", True)) if _dev_mode() else True
 
 
-@cl.on_chat_start
-async def on_chat_start():
-    cl.user_session.set("history", [])
+async def _start_session(history: List[Dict[str, str]]) -> None:
+    cl.user_session.set("history", history)
     cl.user_session.set("settings", await _send_settings())
     await cl.context.emitter.set_modes([_model_mode()])
+
+
+@cl.on_chat_start
+async def on_chat_start():
+    await _start_session([])
 
     # Toasts, not messages: a message would hide the starters.
     user = cl.user_session.get("user")
@@ -174,6 +199,56 @@ async def on_chat_start():
         await cl.context.emitter.send_toast(
             f"Data dictionary missing or empty ({DATA_DICT_DIR}). Answers will be "
             "far less reliable.", type="error")
+
+
+@cl.on_chat_resume
+async def on_chat_resume(thread: Dict[str, Any]):
+    """Reopen a saved chat: rebuild the conversation the model sees and
+    re-attach each answer's table, chart and downloads.
+
+    Both come from the answer messages' saved metadata, not from the session
+    Chainlit stores on disconnect, which a crash or restart skips."""
+    history: List[Dict[str, str]] = []
+    saved = []
+    for step in thread.get("steps", []):
+        if step.get("type") != "assistant_message":
+            continue
+        record = chat_store.read_answer_metadata(step.get("metadata"))
+        if record:
+            history.append({"question": record["question"], "answer": record["answer"]})
+            saved.append((step["id"], record.get("result")))
+    await _start_session(history)
+
+    for step_id, result in saved:
+        df = chat_store.preview_dataframe(result)
+        if df is None:
+            continue
+        elements, _captions = await _result_parts(df, result.get("query_id"),
+                                                  result.get("chart"), dev=False)
+        await _attach_to_resumed_thread(thread, step_id, elements)
+
+
+async def _attach_to_resumed_thread(thread: Dict[str, Any], step_id: str,
+                                    elements: List[cl.Element]) -> None:
+    """Add elements to the thread Chainlit is about to send to the browser.
+
+    Two Chainlit 2.12 quirks shape this (re-check both after an upgrade;
+    tests/test_chat_store.py guards the first and the private _create):
+    - on_chat_resume runs BEFORE the thread is sent, and the browser replaces
+      its elements with the thread's on arrival - so element.send() from here
+      is wiped. Elements must travel inside the thread.
+    - the browser derives an element's URL from its chainlitKey for a live
+      element but not for one inside a resumed thread, which it then drops.
+      So the URL is set here, to the same session-and-user-checked file route.
+    `_create` is private: it stores the content in the session without
+    emitting anything."""
+    session_id = cl.context.session.id
+    root = (cl_config.run.root_path or "").rstrip("/")
+    for element in elements:
+        element.for_id = step_id
+        await element._create(persist=False)
+        element.url = f"{root}/project/file/{element.chainlit_key}?session_id={session_id}"
+        thread.setdefault("elements", []).append(element.to_dict())
 
 
 @cl.on_settings_update
@@ -327,18 +402,19 @@ async def _stream_agent(messages: List[Dict[str, str]], dev: bool):
     return final_answer, answer
 
 
-async def _result_parts(ctx: RunContext, dev: bool):
-    """Notices, caption lines and elements for a finished run's results."""
+async def _result_parts(df: Optional[pd.DataFrame], query_id: Optional[str],
+                        chart: Optional[Dict[str, Any]], dev: bool):
+    """Caption lines and elements for a run's results. Used for a fresh
+    answer and again, from the saved preview, when a chat is reopened."""
     elements: List[cl.Element] = []
     captions: List[str] = []
-    df = ctx.dataframe
     if df is None:
         return elements, captions
 
-    if ctx.chart:
+    if chart:
         try:
-            label = ctx.chart.get("title", "chart") + (" (auto-generated)" if ctx.chart.get("auto") else "")
-            elements.append(cl.Plotly(name=label, figure=plotly_figure(df, ctx.chart),
+            label = chart.get("title", "chart") + (" (auto-generated)" if chart.get("auto") else "")
+            elements.append(cl.Plotly(name=label, figure=plotly_figure(df, chart),
                                       display="inline", size="large"))
         except Exception as e:           # a bad chart must not lose the answer
             captions.append(f"⚠️ Could not render chart: {e}")
@@ -350,7 +426,6 @@ async def _result_parts(ctx: RunContext, dev: bool):
 
     elements.append(cl.Dataframe(name="Results", data=df, display="inline"))
 
-    query_id = ctx.query_id
     s3_csv: bytes = await cl.make_async(_fetch_s3_csv)(query_id) if query_id else b""
     total_rows = max(s3_csv.count(b"\n") - 1, len(df)) if s3_csv else len(df)
 
@@ -418,11 +493,15 @@ async def on_message(message: cl.Message):
         await cl.Message(content=_failure_text(e, dev)).send()
         return
 
-    elements, captions = await _result_parts(ctx, dev)
+    elements, captions = await _result_parts(ctx.dataframe, ctx.query_id, ctx.chart, dev)
     notices = "\n".join(f"> ℹ️ {n}" for n in ctx.notices)
     answer.content = "\n\n".join(p for p in (
         notices, final_answer, "\n".join(f"_{c}_" for c in captions)) if p)
     answer.elements = elements
+    # Saved with the message, so a reopened chat can rebuild its context and
+    # results without any file storage (see chat_store).
+    answer.metadata = chat_store.answer_metadata(
+        question, final_answer, ctx.dataframe, ctx.query_id, ctx.chart, ctx.notices)
     await answer.send()
 
     cl.user_session.get("history").append({"question": question, "answer": final_answer})

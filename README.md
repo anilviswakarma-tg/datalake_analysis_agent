@@ -21,6 +21,10 @@ python -m venv .venv
 ./.venv/Scripts/streamlit.exe run app.py                 # http://localhost:8501
 ```
 
+Chat history is saved to `app/data/chat_history.db` (SQLite) and survives
+restarts; set `CHAT_DB_URL` to use another database. See
+[app/ARCHITECTURE.md](app/ARCHITECTURE.md).
+
 Chainlit needs `CHAINLIT_AUTH_SECRET` in `.env` (generate one with
 `./.venv/Scripts/chainlit.exe create-secret`). With `DEV_SKIP_AUTH=true` it
 signs you in automatically on a dev machine, as the Streamlit app does.

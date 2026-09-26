@@ -24,10 +24,12 @@ rule is what keeps the graph acyclic, and `tests/test_wiring.py` enforces it.
 | `prompt.py` | ~165 | The agent system prompt. |
 | `tools.py` | ~510 | The 13 tools the agent can call. |
 | `agent.py` | ~40 | Assembles model + tools + prompt into the LangChain agent. |
+| `chat_store.py` | ~210 | Chat history: which database (`CHAT_DB_URL`), the portable schema, the result snapshot saved with each answer. No UI imports. |
 | `ui.py` | ~205 | Styling, the agent catalogue, conversation buckets, rendering a run. |
 | `auth.py` | ~195 | Login screen, SSO/password paths, session expiry, dev bypass. |
 | `app.py` | ~360 | Streamlit page composition and run loop. Being retired. |
-| `chainlit_app.py` | ~430 | Chainlit auth callbacks, chat profiles, model picker, streamed run. Entry point. |
+| `chainlit_data.py` | ~75 | Chainlit's SQLAlchemy data layer, fixed to work on any backend. |
+| `chainlit_app.py` | ~430 | Chainlit auth callbacks, chat profiles, model picker, streamed run, chat resume. Entry point. |
 
 ### Why the boundaries fall where they do
 
@@ -45,6 +47,23 @@ rule is what keeps the graph acyclic, and `tests/test_wiring.py` enforces it.
   `build_active_llm()`, so the agent and the checker can't disagree.
 - **`config.py` imports nothing** from this package, so every other module can
   depend on it freely.
+
+### Chat history is database-agnostic
+
+- **The database is one setting.** `CHAT_DB_URL` is a SQLAlchemy async URL.
+  Unset means SQLite at `data/chat_history.db` (a Docker volume in
+  deployment); `off` disables history. Postgres later is a URL change plus
+  `pip install asyncpg`, with no code change.
+- **We own the schema** (`chat_store.SCHEMA`, created at startup): portable
+  types only, so the same tables work everywhere. Chainlit's published DDL is
+  Postgres-only and misses a column it writes.
+- **`chainlit_data.py` fixes the stock data layer**, which silently lost
+  user messages and thread metadata on SQLite, and logs failed writes as
+  errors instead of warnings.
+- **No blob storage.** Each answer saves its ~100 preview rows, chart spec and
+  query id in its metadata (`chat_store.answer_metadata`). Reopening a chat
+  rebuilds the table and chart from that, and re-fetches the full CSV from S3
+  by query id while Athena's result object still exists.
 
 ## Knowledge sources
 

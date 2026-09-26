@@ -15,3 +15,23 @@ services:
       # Streamlit config — edits take effect on container restart (no rebuild)
       - ./.streamlit:/app/.streamlit
     restart: unless-stopped
+
+  # The Chainlit UI (ROADMAP phase 2), run from the same image alongside the
+  # Streamlit service above until that is retired.
+  datalake-agent-chainlit:
+    image: datalake-agent:latest
+    container_name: datalake-agent-chainlit
+    depends_on:
+      - datalake-agent        # builds the shared image
+    command: ["chainlit", "run", "chainlit_app.py", "--host", "0.0.0.0",
+              "--port", "8000", "--headless"]
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./knowledge:/app/knowledge
+      # Chat history (SQLite) - must survive container rebuilds and deploys.
+      - ./data:/app/data
+    restart: unless-stopped
+

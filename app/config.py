@@ -53,6 +53,9 @@ FEEDBACK_FILE = KNOWLEDGE_DIR / "feedback.md"
 DATA_DICT_DIR = KNOWLEDGE_DIR / "data-dictionary"
 DATA_DICT_README = DATA_DICT_DIR / "README.md"
 LOGO_FILE = SCRIPT_DIR / "assets" / "logo.png"
+# Runtime state that must survive restarts (chat history). A Docker volume in
+# deployment; gitignored locally.
+DATA_DIR = SCRIPT_DIR / "data"
 
 
 def _openai_key_looks_real() -> bool:
