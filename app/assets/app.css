@@ -1,0 +1,222 @@
+/* ============================================================
+   Data Lake Agent — authenticated app styles
+   Palette mirrors apis-playground (ElevenLabs charcoal + orange).
+   Injected by _inject_css("app.css") at the top of main().
+   ============================================================ */
+
+/* ── Main content: constrain to a centered ~920px column (matches the
+      playground home: maxWidth 920 / margin auto) instead of full-bleed.
+      968px − 2×1.5rem (48px) side padding = 920px content. ── */
+.block-container {
+  max-width: 968px !important;
+  padding-left: 1.5rem !important;
+  padding-right: 1.5rem !important;
+  margin-left: auto !important;
+  margin-right: auto !important;
+}
+
+/* ── Sidebar: pull content up to the top-left corner ──
+   Streamlit reserves a ~60px header row for the collapse chevron above our
+   content, which floats the logo down. Collapse that header to just the
+   chevron so the logo sits near the very top. */
+section[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {
+  min-height: 0 !important;
+  height: auto !important;
+  padding-top: 0.5rem !important;
+  padding-bottom: 0 !important;
+  margin-bottom: 4px !important;
+}
+
+/* ── Sidebar: logo (big, left-aligned, playground-style) ── */
+/* Logo art is 3.28:1, so size by width (height auto) to avoid overflow /
+   distortion in Streamlit's ~200px-wide sidebar content area. */
+.tg-sb-logo {
+  padding: 0 2px 14px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid #333333;
+}
+.tg-sb-logo img {
+  width: 100%;
+  max-width: 200px;
+  height: auto;
+  display: block;
+}
+
+/* Section label ("AGENTS") — matches the playground "ADVANCED APIS" label */
+.tg-sb-label {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.09em;
+  text-transform: uppercase; color: #7f7878; padding: 10px 6px 8px;
+}
+
+/* Vertical spacing between sidebar items — a touch of air between each agent so
+   the divider lines (below) have room to breathe. */
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: 8px !important; }
+
+/* ── Sidebar nav items ──────────────────────────────────────────────
+   Match the playground top-level menu (Registration / Login / …):
+   rgb(200,200,200), weight 600, 14px, LEFT-aligned, full width.
+   Streamlit's button flex/centering is injected by emotion at runtime,
+   so every alignment property is forced with !important and we also
+   left-align the inner markdown paragraph as a non-flex fallback. */
+section[data-testid="stSidebar"] div[class*="st-key-nav_"] button {
+  display: flex !important;
+  width: 100% !important;
+  justify-content: flex-start !important;
+  align-items: center !important;
+  text-align: left !important;
+  white-space: normal !important;
+  height: auto !important;
+  background: transparent !important;
+  border: none !important;
+  color: rgb(230,230,230) !important;
+  font-weight: 700 !important;
+  font-size: 14px !important;
+  line-height: 1.3 !important;
+  padding: 7px 12px !important;
+  border-radius: 8px !important;
+  margin: 0 !important;
+  box-shadow: inset 2px 0 0 transparent;
+}
+section[data-testid="stSidebar"] div[class*="st-key-nav_"] button:hover {
+  background: rgba(255,255,255,0.05) !important;
+  color: rgb(245,245,245) !important;
+}
+/* Divider between each agent — same 1px #333 line as under the logo and above
+   the footer, so items visually stand apart. padding-bottom gives the line room
+   below the label; the stVerticalBlock gap above adds the matching space. */
+section[data-testid="stSidebar"] div[class*="st-key-nav_"] {
+  border-bottom: 1px solid #333333;
+  padding-bottom: 8px;
+}
+/* Nav icon (Material, via icon= param) — plain near-white line icon, like the
+   playground menu; sits just left of the label. */
+section[data-testid="stSidebar"] div[class*="st-key-nav_"] button [data-testid="stIconMaterial"] {
+  color: rgb(205,205,205) !important;
+  font-size: 19px !important; width: 19px !important; height: 19px !important;
+  flex-shrink: 0; margin-right: 4px;
+}
+/* The button wraps its label in unnamed flex <div>/<span> wrappers that
+   Streamlit sets to justify-content:center — that (not the button itself)
+   is what floats a short label to the middle. Force every wrapper left. */
+section[data-testid="stSidebar"] div[class*="st-key-nav_"] button div,
+section[data-testid="stSidebar"] div[class*="st-key-nav_"] button span {
+  justify-content: flex-start !important;
+  text-align: left !important;
+}
+section[data-testid="stSidebar"] div[class*="st-key-nav_"] button [data-testid="stMarkdownContainer"],
+section[data-testid="stSidebar"] div[class*="st-key-nav_"] button p {
+  width: 100%;
+  text-align: left !important;
+  margin: 0;
+}
+
+/* ── Top bar ── */
+.tg-topbar-title { font-size: 21px; font-weight: 700; color: rgb(205,205,205); padding-top: 4px; }
+
+/* ── Selected-agent section header ── */
+.tg-section-title { font-size: 24px; font-weight: 800; color: rgb(212,212,212); margin: 2px 0 2px; }
+.tg-section-sub { font-size: 14px; color: #9A9A9A; margin: 0 0 18px; }
+
+/* ── Landing hero ── */
+.tg-hero-badge { display:inline-block; background: rgba(232,84,32,0.15); color:#E85420;
+  font-size:12px; font-weight:600; letter-spacing:0.5px; padding:4px 12px; border-radius:100px; }
+.tg-hero-title { font-size:34px; font-weight:800; line-height:1.15; color:rgb(210,210,210);
+  margin:16px 0 12px; }
+.tg-hero-desc { font-size:16px; color:#9A9A9A; line-height:1.6; max-width:660px; margin-bottom:6px; }
+
+/* ── Clickable tiles (agent tiles + per-agent question tiles) ──
+   The Material icon (button icon= param) sits inline to the LEFT of the text;
+   the text block (title + optional description) stacks to its right — icon and
+   text share a row instead of the icon floating on its own line above. */
+div[class*="st-key-agent_tiles"] [data-testid="stButton"] > button,
+div[class*="st-key-q_tiles"] [data-testid="stButton"] > button {
+  background:#222222 !important; border:1px solid #3a3a3a !important; border-radius:12px !important;
+  padding:13px 16px !important; min-height:72px; height:100%;
+  display:flex !important; flex-direction:row !important;
+  align-items:center !important; justify-content:flex-start !important; gap:12px;
+  text-align:left !important; white-space:normal !important;
+  color:rgb(200,200,200) !important; font-weight:500; box-shadow:none !important; }
+div[class*="st-key-agent_tiles"] [data-testid="stButton"] > button:hover,
+div[class*="st-key-q_tiles"] [data-testid="stButton"] > button:hover {
+  border-color:#4a4a4a !important; background:#262626 !important; color:rgb(215,215,215) !important; }
+/* Orange border only while the tile is clicked/active (or keyboard-focused) */
+div[class*="st-key-agent_tiles"] [data-testid="stButton"] > button:active,
+div[class*="st-key-agent_tiles"] [data-testid="stButton"] > button:focus,
+div[class*="st-key-q_tiles"] [data-testid="stButton"] > button:active,
+div[class*="st-key-q_tiles"] [data-testid="stButton"] > button:focus {
+  border-color:#E85420 !important; }
+/* Icon — accent orange, never shrinks. Question tiles are single-line (smaller);
+   agent-tile icons are sized to span the title+description block height. */
+div[class*="st-key-q_tiles"] button [data-testid="stIconMaterial"] {
+  color:#E85420 !important; font-size:24px !important;
+  width:24px !important; height:24px !important; flex-shrink:0; }
+div[class*="st-key-agent_tiles"] button [data-testid="stIconMaterial"] {
+  color:#E85420 !important; font-size:37px !important;
+  width:37px !important; height:37px !important; flex-shrink:0; }
+/* Space between icon and text: the icon+label sit in a flex <span> whose default
+   gap is only 8px — too tight against these large accent icons. Widen that gap. */
+div[class*="st-key-agent_tiles"] button > div > span { gap: 20px !important; }
+div[class*="st-key-q_tiles"] button > div > span { gap: 14px !important; }
+/* Text block — left aligned, tight paragraphs. Title + description are two
+   markdown <p>s; tighten BOTH line-heights (not just the 2px inter-paragraph
+   margin) so the description sits right under the title — the default 1.6
+   line-height was adding ~8px of invisible leading between the glyph rows.
+   The icon (above) is sized to the resulting title+description block height. */
+div[class*="st-key-agent_tiles"] button [data-testid="stMarkdownContainer"],
+div[class*="st-key-q_tiles"] button [data-testid="stMarkdownContainer"] {
+  text-align:left !important; width:100%; }
+div[class*="st-key-agent_tiles"] button [data-testid="stMarkdownContainer"] p,
+div[class*="st-key-q_tiles"] button [data-testid="stMarkdownContainer"] p { margin:0 !important; }
+div[class*="st-key-agent_tiles"] button [data-testid="stMarkdownContainer"] p { line-height:1.2 !important; }
+div[class*="st-key-agent_tiles"] button strong {
+  font-size:15px; color:rgb(220,220,220); font-weight:700; line-height:1.2; }
+div[class*="st-key-agent_tiles"] button [data-testid="stMarkdownContainer"] p:last-child {
+  color:#9A9A9A; font-weight:400; font-size:13px; line-height:1.3 !important; margin-top:2px !important; }
+
+/* ── Main-area action buttons (All agents + Clear conversation) — 1px TG-orange border ── */
+div[class*="st-key-clear_conv_top"] button,
+div[class*="st-key-back_overview"] button {
+  border: 1px solid #E85420 !important;
+}
+div[class*="st-key-clear_conv_top"] button:hover,
+div[class*="st-key-back_overview"] button:hover {
+  border-color: #D04818 !important;
+  color: #E85420 !important;
+}
+
+/* ── Sidebar footer (signed-in user + Sign out), pinned to the bottom ──
+   Make the sidebar's content stack fill the height so margin-top:auto on the
+   footer pushes it to the bottom, playground-style. */
+/* Pin the footer to the bottom of the sidebar. Anchor to the SECTION (whose box
+   matches the visible width), NOT stSidebarContent — the latter is a few px
+   wider (scrollbar gutter), which pushed the Sign out button past the right
+   edge. The nav list is short, so there's always empty space above the footer. */
+section[data-testid="stSidebar"] { position: relative; }
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"] { position: static; }
+section[data-testid="stSidebar"] div[class*="st-key-sb_footer"] {
+  position: absolute; left: 16px; right: 16px; bottom: 14px; width: auto !important;
+  border-top: 1px solid #333333; padding-top: 12px;
+}
+/* The email's element-container collapses to ~6px tall in the footer's flex
+   column (a Streamlit layout quirk), which let the email overflow down onto the
+   Sign out button — the "too close" complaint. Reserve one line's height so the
+   button always clears it. Targeted via :has() so only the email row is pinned,
+   not the button. */
+section[data-testid="stSidebar"] div[class*="st-key-sb_footer"] [data-testid="stElementContainer"]:has(.tg-sb-user) {
+  min-height: 1.7rem !important;
+}
+/* Keep the email on a single line (full address shown on hover via title=),
+   so however long the address is it can never wrap into the button. */
+.tg-sb-user {
+  color:#B5B5B5; font-size:14px; padding:2px 6px 0; line-height:1.45;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%;
+}
+/* Clear gap between the email and the Sign out button. */
+section[data-testid="stSidebar"] div[class*="st-key-sb_signout"] { margin-top: 10px !important; }
+section[data-testid="stSidebar"] div[class*="st-key-sb_signout"] button {
+  background:transparent !important; border:1px solid #404040 !important;
+  color:#9A9A9A !important; font-size:13px !important; font-weight:500 !important;
+}
+section[data-testid="stSidebar"] div[class*="st-key-sb_signout"] button:hover {
+  border-color:#E85420 !important; color:#E85420 !important;
+}

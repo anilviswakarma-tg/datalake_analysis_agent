@@ -1,0 +1,24 @@
+[server]
+maxUploadSize = 200
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false
+
+[runner]
+magicEnabled = false
+
+# Hide Streamlit's built-in developer toolbar (Deploy button + ⋮ dev menu)
+# for the internal, non-technical audience. "minimal" leaves only the
+# unremovable "Made with Streamlit" footer.
+[client]
+toolbarMode = "minimal"
+
+# TunedGlobal dark theme (matches the API Sandbox / apis-playground palette)
+[theme]
+base = "dark"
+primaryColor = "#E85420"
+backgroundColor = "#1A1A1A"
+secondaryBackgroundColor = "#222222"
+textColor = "#C8C8C8"

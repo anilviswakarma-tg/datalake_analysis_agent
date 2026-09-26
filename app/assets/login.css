@@ -1,0 +1,97 @@
+/* ============================================================
+   Data Lake Agent — login screen
+   Mirrors the apis-playground /login page (charcoal + orange).
+   Injected by _inject_css("login.css") in _check_auth().
+   ============================================================ */
+
+/* Hide the default Streamlit header/toolbar on the login page */
+[data-testid="stHeader"], [data-testid="stToolbar"] { display: none !important; }
+[data-testid="stAppViewContainer"] { background: #1A1A1A; }
+html, body { overflow-x: hidden; }
+
+/* Narrow, centered column. Content box resolves to 440px so the bordered
+   card below matches the playground login card exactly:
+   504px max-width − 2rem (32px) side padding = 440px card border-box. */
+.block-container {
+  max-width: 504px !important;
+  padding-left: 2rem !important;
+  padding-right: 2rem !important;
+  padding-top: 3.2rem !important;
+  padding-bottom: 2rem !important;
+}
+
+.tg-logo { text-align: center; margin-bottom: 36px; }
+.tg-logo img { height: 76px; width: auto; }
+
+/* Card = the bordered Streamlit container below (keyed for a stable hook) */
+.st-key-login_card {
+  background: #222222 !important;
+  border: 1px solid #404040 !important;
+  border-radius: 16px !important;
+  padding: 36px 32px !important;
+}
+
+.tg-badge {
+  display: inline-block;
+  background: rgba(232,84,32,0.15);
+  color: #E85420;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.5px;
+  padding: 3px 10px; border-radius: 100px;
+  margin-bottom: 16px;
+}
+.tg-title {
+  color: rgb(200,200,200);
+  font-size: 22px; font-weight: 700; line-height: 1.25;
+  margin: 0 0 10px;
+}
+.tg-desc {
+  color: #9A9A9A; font-size: 14px; line-height: 1.65;
+  margin: 0 0 22px;
+}
+
+/* Inputs → dark + mono, matching the sandbox.
+   Border + background live on the ROOT element (which wraps the input AND the
+   password reveal/eye button) so the password box is the SAME width as the
+   email box and the eye overlays inside the box rather than pushing the
+   bordered area inward. */
+[data-testid="stTextInput"] label p {
+  color: #9A9A9A !important; font-size: 12px !important; font-weight: 500 !important;
+}
+[data-testid="stTextInputRootElement"] {
+  background: #2A2A2A !important;
+  border: 1px solid #404040 !important;
+  border-radius: 8px !important;
+}
+[data-testid="stTextInputRootElement"]:focus-within {
+  border-color: #E85420 !important;
+}
+[data-testid="stTextInput"] input {
+  background: transparent !important;
+  border: none !important;
+  color: rgb(200,200,200) !important;
+  font-family: monospace !important; font-size: 14px !important;
+}
+[data-testid="stTextInput"] input::placeholder { color: #6b6b6b !important; }
+/* Reveal (eye) button — transparent + muted, overlaid inside the box */
+[data-testid="stTextInputRootElement"] button {
+  background: transparent !important; border: none !important; color: #9A9A9A !important;
+}
+
+/* Primary CTA → solid orange, full width */
+div[data-testid="stButton"] > button[kind="primary"] {
+  background-color: #E85420 !important;
+  border: none !important;
+  color: #ffffff !important;
+  border-radius: 8px !important;
+  font-weight: 600 !important;
+  padding: 11px 20px !important;
+}
+div[data-testid="stButton"] > button[kind="primary"]:hover {
+  background-color: #D04818 !important;
+}
+
+.tg-footer {
+  text-align: center; font-size: 12px; color: #7f7878;
+  line-height: 1.7; margin-top: 18px;
+}
+.tg-footer a { color: #E85420; text-decoration: none; }

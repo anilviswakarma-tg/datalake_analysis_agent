@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  datalake-agent:
+    build: .
+    image: datalake-agent:latest
+    container_name: datalake-agent
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    volumes:
+      # Knowledge files persist across rebuilds
+      - ./knowledge:/app/knowledge
+      # Streamlit config — edits take effect on container restart (no rebuild)
+      - ./.streamlit:/app/.streamlit
+    restart: unless-stopped

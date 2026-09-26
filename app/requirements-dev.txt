@@ -1,0 +1,11 @@
+# Development and test dependencies.
+#
+# Kept separate from requirements.txt so the deployed image doesn't carry a
+# test runner. Install both locally:
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# These were previously installed ad hoc, which meant a fresh clone could not
+# run the suite — `pytest` was missing from every manifest.
+
+pytest>=8.0.0
