@@ -109,6 +109,7 @@ def _assert_tools_wrote_to(ctx):
 
 def test_tool_writes_reach_the_caller_through_a_sync_agent_run():
     ctx = run_state.start_run(question="q", execute_live=False)
+    ctx.dictionary_loaded = True      # the scripted agent goes straight to SQL
     agent = _scripted_agent()
     list(agent.stream({"messages": [{"role": "user", "content": "q"}]},
                       stream_mode="values"))
@@ -119,6 +120,7 @@ def test_tool_writes_reach_the_caller_through_an_async_agent_run():
     """The Chainlit path: astream from an event loop, sync tools in executors."""
     async def go():
         ctx = run_state.start_run(question="q", execute_live=False)
+        ctx.dictionary_loaded = True  # the scripted agent goes straight to SQL
         agent = _scripted_agent()
         async for _ in agent.astream({"messages": [{"role": "user", "content": "q"}]},
                                      stream_mode="values"):

@@ -18,6 +18,8 @@ question about a store's catalogue; see [track_active.md](track_active.md).
 | Column | Meaning |
 |---|---|
 | `id` | Primary key. FK target for `stock_code_id` in `music_streams_v3`/`playactivity_v2`, and for `track_id` in `track_active`/`disambiguation_v1`. |
+| `stock_code` | **The product code users quote.** `{owner_id}_{UPC}_{ISRC}` on track rows (`1399_00199957799768_USUM71409728`), `{owner_id}_{UPC}` on album rows (`1399_00199957799768`). Match it exactly against this column — never split it into `id`, `pk` or `track_id` guesses. The same ISRC appears on many albums, so the UPC part matters: `USUM71409728` alone matched 20 tracks under one owner (measured 2026-09-30). See "Looking up products by stock code" below. |
+| `pk` | `'Track#<id>'` / `'Album#<id>'` — a key string, never a stock code. |
 | `dw_stock_type` | `'track'` or `'album'` — also a partition column. |
 | `owner_id` | Owning label/catalogue. Partition column. **Live/mutable** — see caveat below. |
 | `album_id` | Populated on track rows only — links a track to its parent album (`mastermusic.id` where `dw_stock_type='album'`). |
@@ -33,7 +35,7 @@ question about a store's catalogue; see [track_active.md](track_active.md).
 | `content_language` | Language of the track's actual audio content. Uses 3-letter codes (e.g. `AMH`), a different scheme than `language`/`language2`'s 2-letter codes. Sparsely populated — only ~11% filled in a sampled owner_id — verify fill rate before relying on it as a primary filter. |
 | `is_video`, `is_karaoke`, `is_audiobook` | Boolean flags, but **nullable, not just true/false** — some rows have `NULL` instead of `false` (confirmed for `is_video` 2026-08-25, e.g. mastermusic ids `73375392`/`95894977` under owner `1216`; same nullability applies to `is_karaoke`/`is_audiobook`). A filter written as `WHERE is_video = false` silently drops these rows (`NULL = false` → `NULL`, not true). To mean "flag is not set," use `WHERE (is_video = false OR is_video IS NULL)` or `WHERE coalesce(is_video, false) = false` — same pattern for the other two flags. **`is_karaoke = true` implies `is_video = true`** (karaoke tracks are a video subtype) — when checking for either karaoke or video content, check `is_karaoke` first/separately rather than assuming `is_video = false` rules out karaoke. |
 | `asset_type` | Audio bitrate/quality tier: `505` = low (48 kbps), `506` = high (96 kbps), `522` = HQ (256 kbps). Integer, compared without quotes. "Does client X have HQ audio for all its labels?" means checking each label has **at least one** `asset_type = 522` track — `COUNT(CASE WHEN asset_type = 522 THEN 1 END) > 0` per `owner_id`, reached via [track_active.md](track_active.md) for the client's labels. |
-| `rights` | Map keyed by territory code (e.g. `WW` = worldwide, `US` = United States), value struct includes `act` (1/0 active flag), `astr` (boolean, streaming allowed), `ssdt`/`sedt` (ISO-8601 rights start/end date strings). `ssdt` null = no lower bound (treat as min/-infinity time); `sedt` null = no upper bound (treat as max/+infinity time). "Currently active right" = `act = 1 AND astr = true AND (ssdt IS NULL OR ssdt <= now) AND (sedt IS NULL OR sedt >= now)` for at least one territory entry via `CROSS JOIN UNNEST(map_values(rights))`. **These are the rights available on the track itself** — catalogue-wide, with no store dimension. They are not any store's rights and must never be mixed with, or read as, store availability; for that see [track_active.md](track_active.md). Two further cautions: `sedt`/`sed` are unset on the overwhelming majority of entries, so the end-date test is effectively inert; and `WW` may be absent entirely, with worldwide grants appearing instead as many individual per-country entries — so `WW` alone is not a reliable test for worldwide rights. |
+| `rights` | Map keyed by territory code (e.g. `WW` = worldwide, `US` = United States) — **the key's case varies by row** (`US` on some, `us` on others; compare `upper(key)`, see "Looking up products by stock code"), value struct includes `act` (1/0 active flag), `astr` (boolean, streaming allowed), `ssdt`/`sedt` (ISO-8601 rights start/end date strings). `ssdt` null = no lower bound (treat as min/-infinity time); `sedt` null = no upper bound (treat as max/+infinity time). "Currently active right" = `act = 1 AND astr = true AND (ssdt IS NULL OR ssdt <= now) AND (sedt IS NULL OR sedt >= now)` for at least one territory entry via `CROSS JOIN UNNEST(map_values(rights))`. **These are the rights available on the track itself** — catalogue-wide, with no store dimension. They are not any store's rights and must never be mixed with, or read as, store availability; for that see [track_active.md](track_active.md). Two further cautions: `sedt`/`sed` are unset on the overwhelming majority of entries, so the end-date test is effectively inert; and `WW` may be absent entirely, with worldwide grants appearing instead as many individual per-country entries — so `WW` alone is not a reliable test for worldwide rights. |
 
 ## Artist vs label vs distributor — four different name columns
 
@@ -68,6 +70,85 @@ distinct imprint. **When asked about a label or imprint by name, search `label`,
 `sub_label_name` and `owner_name` and report which column matched** rather than
 assuming one. Both `label` and `sub_label_name` are 100% populated, so a null
 check tells you nothing.
+
+## Looking up products by stock code
+
+"Check these products / stock codes and tell me whether they are available
+for streaming, and in which territories" is answered from this table: the
+`rights` map, per territory. No store is named, so it is a catalogue question,
+not a `track_active` one. (If a store *is* named, answer from
+[track_active.md](track_active.md) instead.)
+
+Put every code the user gave into a `VALUES` list and `LEFT JOIN`, so the
+result has **one row per input code, including the ones that don't exist**
+(`NOT FOUND` in the row, never dropped). Derive the partition filters from the
+code itself: the first part is `owner_id`, and three parts means a track, two
+an album. Without them the lookup scans the whole table. Use this query as it
+stands, changing only the codes and the territory columns asked about:
+
+```sql
+WITH input(stock_code) AS (VALUES
+  '1399_00199957799768_USUM71409728',
+  '1399_00199957799768'),
+products AS (
+  SELECT i.stock_code, m.id, m.dw_stock_type, m.title, m.artist_name,
+         -- territory codes are upper case on some rows and lower on others
+         -- (owner 1399: 24% lower, never mixed in one row), so compare upper()
+         transform(map_entries(m.rights), e -> CAST(ROW(upper(e[1]),
+           e[2].act = 1 AND e[2].astr
+           AND (e[2].ssdt IS NULL OR from_iso8601_timestamp(e[2].ssdt) <= current_timestamp)
+           AND (e[2].sedt IS NULL OR from_iso8601_timestamp(e[2].sedt) >= current_timestamp))
+           AS ROW(territory varchar, live boolean))) AS r
+  FROM input i
+  LEFT JOIN "tg-deltalake-bronze".mastermusic m
+    ON m.stock_code = i.stock_code
+   AND m.owner_id = split_part(i.stock_code, '_', 1)
+   AND m.dw_stock_type = IF(cardinality(split(i.stock_code, '_')) = 3, 'track', 'album')
+   AND m.status = 1)
+SELECT stock_code,
+       CASE WHEN id IS NULL THEN 'NOT FOUND' ELSE dw_stock_type END AS type,
+       title, artist_name,
+       CASE WHEN id IS NOT NULL THEN IF(any_match(r, x -> x.live), 'Yes', 'No') END AS streaming_anywhere,
+       -- a territory's own entry decides; WW only when it has none
+       CASE WHEN id IS NOT NULL THEN IF(
+         IF(any_match(r, x -> x.territory = 'US'), any_match(r, x -> x.territory = 'US' AND x.live),
+                                                   any_match(r, x -> x.territory = 'WW' AND x.live)),
+         'Yes', 'No') END AS us_streaming,
+       CASE WHEN id IS NOT NULL THEN IF(
+         IF(any_match(r, x -> x.territory = 'CA'), any_match(r, x -> x.territory = 'CA' AND x.live),
+                                                   any_match(r, x -> x.territory = 'WW' AND x.live)),
+         'Yes', 'No') END AS ca_streaming,
+       array_join(array_sort(transform(filter(r, x -> x.live), x -> x.territory)), ',') AS streaming_territories
+FROM products
+```
+
+It returns text `Yes`/`No`, which reads correctly in the CSV/Excel download.
+Checked 2026-09-30 against tracks keyed `US`, keyed `us`, keyed only `AU`, and
+a code that does not exist.
+
+- **Territory codes are not consistently upper case.** Owner `1399`: 857,569 of
+  3.59M active tracks key `rights` in lower case (`us`, `gb`), the rest upper;
+  never both in one row (measured 2026-09-30). `element_at(rights, 'US')`
+  silently misses a lower-case row and reports "No" wrongly — always compare
+  `upper(key)`, as above.
+- **A right counts only while it is live**: `act = 1`, `astr = true`, and today
+  between `ssdt` and `sedt` (either may be null). Start dates run up to
+  2026-12-31, so future rights exist.
+- **No entry for a territory means no rights there.** Owner `1399` lists every
+  territory individually and never uses `WW`. Example:
+  `1399_00199957799768_USUM71409728` has only `AU`, with `astr = false`, so it
+  can't be streamed anywhere, US and CA included.
+- **`WW` is a fallback, and that's unverified.** How a `WW` entry combines
+  with a territory's own entry has not been measured, and no owner checked so
+  far uses both. Say so if the answer depends on it.
+- **`UM` is not the US** — it's US Minor Outlying Islands.
+- **"Available" has two meanings.** Rights (this table) answer "may it be
+  streamed in the US at all". Whether a given store actually carries it is
+  `track_active` (`group_id`, `country`, `allow_stream`). If the user's
+  wording could mean either, answer from rights and say that no store was
+  named.
+- **Don't chart this.** It's a lookup; the table and its downloads are the
+  answer.
 
 ## Common join pattern
 

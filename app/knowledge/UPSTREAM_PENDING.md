@@ -5,7 +5,7 @@
 not upstream. **A refresh from upstream deletes every change listed, silently.**
 Until they land upstream, copy only the unaffected files, or re-apply these
 edits after the refresh. The tests in `tests/test_wiring.py` catch the loss of
-the store-catalogue and `active` rules, but not the rest.
+the store-catalogue, `active` and stock-code rules, but not the rest.
 
 To see the exact current differences:
 
@@ -48,6 +48,17 @@ file when it is empty.
    distributor, not the artist or label (observed producing a wrong "top
    artists" answer on 2026-09-24); `label` vs `sub_label_name` flagged as
    unresolved.
+
+8. **`stock_code` and `pk` documented, plus a new section "Looking up products
+   by stock code"** — the `{owner_id}_{UPC}_{ISRC}` / `{owner_id}_{UPC}`
+   format, a batch `VALUES` + `LEFT JOIN` lookup that keeps unmatched codes as
+   `NOT FOUND` rows, and territory streaming from `rights` (owner `1399` has
+   no `WW` entries; `WW`-vs-country precedence unverified). Also: `rights` keys are
+   lower case on 24% of owner `1399`'s tracks (`us`, not `US`), so the query and
+   the `rights` column note both compare `upper(key)`; rights are live only
+   between `ssdt` and `sedt`, and start dates run into the future. Written
+   2026-09-30 after the agent, with the column undocumented, guessed `pk` and
+   `track_id` and reported an existing product as not found.
 
 ## `playactivity.md`
 

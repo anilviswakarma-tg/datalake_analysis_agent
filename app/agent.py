@@ -6,7 +6,8 @@ from langchain.agents import create_agent
 
 import models
 from models import _build_llm
-from prompt import _build_system_prompt
+from prompt import _build_system_prompt, question_hints
+from run_state import current_run
 from tools import (capture_finding, count_rows, describe_table,
                    get_data_dictionary, list_databases,
                    list_tables, note_default_applied, resolve_client,
@@ -39,4 +40,6 @@ def build_agent():
         visualize_results,
         note_default_applied,
     ]
-    return create_agent(model, tools, system_prompt=_build_system_prompt())
+    # Plus notes on what the question itself contains (e.g. stock codes)
+    prompt = _build_system_prompt() + question_hints(current_run().question)
+    return create_agent(model, tools, system_prompt=prompt)

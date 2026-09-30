@@ -3,6 +3,7 @@ workflow, hard rules, and reporting rules."""
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 
 
@@ -114,6 +115,13 @@ STEP 9: Visualize (if appropriate)
 
 STEP 10: Summarize
   2-4 sentences mentioning actual numbers, names, and any defaults applied.
+  Every result table is shown with CSV and Excel download buttons, added
+  automatically. When the user asks for a spreadsheet, say it is in the
+  download below the answer. Never offer to "create" one, and never write a
+  download link, data: URL or CSV text yourself - the buttons are the file.
+  Don't retype the result table in your answer either: it is shown in full
+  below it, and copying it by hand introduces mistakes (a title and artist
+  have been seen swapped). Summarise what it shows instead.
 
 STEP 11: Capture (optional)
   If you learned something genuinely useful that isn't in the knowledge file
@@ -163,6 +171,13 @@ STEP 11: Capture (optional)
 - duration_secs and isrc are TRACK-ONLY; upc is ALBUM-ONLY. Any duration or
   ISRC aggregate must filter dw_stock_type = 'track', or album rows silently
   contribute nothing to it.
+- PRODUCT / STOCK CODES like 1399_00199957799768_USUM71409728 (owner_UPC_ISRC,
+  a track) or 1399_00199957799768 (owner_UPC, an album) are values of
+  mastermusic.stock_code. Match that column exactly; NEVER turn the code into
+  an id, pk or track_id guess. For "is it available for streaming / in US or
+  CA", follow mastermusic.md "Looking up products by stock code": one VALUES
+  row per code with a LEFT JOIN, so every code the user gave comes back,
+  NOT FOUND included; territory streaming comes from the rights map.
 - If two queries in a row have not moved you closer to an answer, STOP and
   report what you have. Repeating a query cannot change its result.
 - STORE CATALOGUE: "active catalogue size for store X" and any "what does
@@ -235,4 +250,47 @@ NEVER present a fabricated number as if it came from a query. This holds even
 when the user clearly expects a result - an empty result is a valid and
 important answer. If you suspect the data is under a different name or column,
 say so and offer to search differently, but do NOT guess the number.
+"""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# QUESTION HINTS
+# ═══════════════════════════════════════════════════════════════════════════
+# Things recognisable in the question itself, pointed out to the agent up
+# front. A rule in the long prompt above is easy for a smaller model to miss
+# (GPT-4o mini invented a rights table for a stock-code question with the
+# rule already there); a note naming the user's own values is not.
+
+# {owner_id}_{UPC} (album) or {owner_id}_{UPC}_{ISRC} (track)
+_STOCK_CODE = re.compile(r"\b\d{1,7}_\d{12,14}(?:_[A-Z]{2}[A-Z0-9]{3}\d{7})?\b")
+_MAX_LISTED_CODES = 200
+
+
+def stock_codes_in(question: str) -> list:
+    """Stock codes in the question, in order, without repeats."""
+    return list(dict.fromkeys(_STOCK_CODE.findall(question or "")))
+
+
+def question_hints(question: str) -> str:
+    """Extra system-prompt text for this question, or ''."""
+    codes = stock_codes_in(question)
+    if not codes:
+        return ""
+    listed = codes[:_MAX_LISTED_CODES]
+    more = (f" (and {len(codes) - len(listed)} more in the question)"
+            if len(codes) > len(listed) else "")
+    return f"""
+
+═══ THIS QUESTION: STOCK CODES ═══
+
+The question contains {len(codes)} product stock code(s){more}:
+{", ".join(listed)}
+
+These are values of "tg-deltalake-bronze".mastermusic.stock_code
+(owner_UPC_ISRC = a track, owner_UPC = an album). Call
+get_data_dictionary("mastermusic") and follow its section "Looking up
+products by stock code": put EVERY code above in one VALUES list and LEFT JOIN
+mastermusic on stock_code, so each code gets a row (NOT FOUND if absent).
+Streaming and territory availability come from the rights map on those rows.
+There is no separate rights or products table.
 """

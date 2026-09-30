@@ -64,6 +64,14 @@ CHART_TYPES = ("bar", "line", "pie", "scatter", "area")
 CHART_COLORS = ["#E85420", "#F0A07F", "#8C8C8C", "#C8C8C8", "#5A5A5A", "#B8401A"]
 
 
+def is_scalar_result(df: pd.DataFrame) -> bool:
+    """A COUNT/SUM-style answer: one row of at most two columns, which the
+    answer text already states, so the UI shows no table or downloads.
+    A one-row lookup with more columns (a product's availability, say) is a
+    record, and a user asking for it as a spreadsheet must still get one."""
+    return len(df) <= 1 and len(df.columns) <= 2
+
+
 def chart_frame(df: pd.DataFrame, chart: Dict[str, str]) -> pd.DataFrame:
     """The rows a chart plots: bar and pie keep the 25 largest, so a long tail
     doesn't turn the chart into noise; other types plot everything."""

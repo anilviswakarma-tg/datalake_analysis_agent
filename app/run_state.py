@@ -43,6 +43,9 @@ class RunContext:
     trace: List[Dict[str, Any]] = field(default_factory=list)
     notices: List[str] = field(default_factory=list)
     executed_sql: List[str] = field(default_factory=list)
+    # Set by get_data_dictionary; sql_db_query refuses to run until it is
+    # (the prompt makes the lookup mandatory, and weaker models skip it)
+    dictionary_loaded: bool = False
 
 
 _CURRENT_RUN: ContextVar[RunContext] = ContextVar("current_run")

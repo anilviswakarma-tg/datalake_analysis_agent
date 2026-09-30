@@ -205,6 +205,20 @@ def test_nobody_teaches_the_agent_to_filter_track_active_on_active():
         assert "active = 'Y'" not in text, source
 
 
+def test_the_agent_is_taught_to_look_up_stock_codes():
+    """With mastermusic.stock_code undocumented, the agent guessed pk and
+    track_id and reported an existing product as not found (2026-09-30). The
+    dictionary section is a local edit (UPSTREAM_PENDING item 8), so a
+    refresh from upstream would drop it silently without this test."""
+    import prompt
+    from config import DATA_DICT_DIR
+    doc = (DATA_DICT_DIR / "mastermusic.md").read_text(encoding="utf-8")
+    assert "| `stock_code` |" in doc
+    assert "## Looking up products by stock code" in doc
+    assert "LEFT JOIN" in doc.split("## Looking up products by stock code")[1]
+    assert "mastermusic.stock_code" in prompt._build_system_prompt()
+
+
 def test_quota_and_auth_failures_get_actionable_messages(monkeypatch):
     """"Please try again" is wrong advice for a quota error (retrying cannot
     help until the window resets) and for an auth error (it never will)."""
@@ -374,3 +388,49 @@ def test_app_fails_fast_on_a_missing_vendor_key():
     src = inspect.getsource(app_mod)
     assert "missing_key_reason(model_choice)" in src
     assert src.index("missing_key_reason(model_choice)") < src.index("build_agent(")
+
+
+# ── stock codes and the dictionary gate (2026-09-30) ────────────────────────
+
+def test_sql_is_refused_until_the_dictionary_is_loaded():
+    """The prompt makes the dictionary lookup mandatory; GPT-4o mini skipped
+    it and invented a table. The tool now enforces it, per run."""
+    import run_state
+    import tools
+    run_state.start_run(execute_live=False)
+    refused = tools.sql_db_query.func("SELECT 1")
+    assert refused.startswith("QUERY NOT RUN") and "get_data_dictionary" in refused
+    tools.get_data_dictionary.func("mastermusic")
+    assert tools.sql_db_query.func("SELECT 1").startswith("EXECUTION SKIPPED")
+    run_state.start_run(execute_live=False)                  # a new question
+    assert tools.sql_db_query.func("SELECT 1").startswith("QUERY NOT RUN")
+
+
+def test_stock_codes_are_recognised_in_the_question():
+    import prompt
+    q = ("check 1399_00199957799768_USUM71409728, 1399_00199957799768 and "
+         "1399_00199957799768_USUM71409728 again; not 2026_09_30 or 555_1234")
+    assert prompt.stock_codes_in(q) == ["1399_00199957799768_USUM71409728",
+                                        "1399_00199957799768"]
+    hint = prompt.question_hints(q)
+    assert "2 product stock code(s)" in hint and "mastermusic.stock_code" in hint
+    assert prompt.question_hints("How many tracks does Sony have?") == ""
+
+
+def test_the_agent_gets_the_hint_for_its_own_question():
+    import inspect
+    import agent
+    src = inspect.getsource(agent.build_agent)
+    assert "question_hints(current_run().question)" in src
+
+
+def test_documented_availability_query_ignores_territory_case():
+    """24% of one owner's tracks key rights in lower case; element_at(rights,
+    'US') silently reports those as unavailable."""
+    from config import DATA_DICT_DIR
+    doc = (DATA_DICT_DIR / "mastermusic.md").read_text(encoding="utf-8")
+    section = doc.split("## Looking up products by stock code")[1].split("\n## ")[0]
+    sql = section.split("```sql")[1].split("```")[0]
+    assert "upper(e[1])" in sql
+    assert "element_at(m.rights" not in sql
+    assert "from_iso8601_timestamp(e[2].ssdt) <= current_timestamp" in sql

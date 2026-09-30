@@ -38,7 +38,8 @@ from config import DATA_DICT_DIR, FEEDBACK_FILE, _openai_key_looks_real
 from entities import _ENTITY_CACHE
 from models import (_MODEL_REGISTRY, explain_failure, message_text,
                     missing_key_reason, model_label)
-from results import df_to_csv_bytes, df_to_excel_bytes, plotly_figure
+from results import (df_to_csv_bytes, df_to_excel_bytes, is_scalar_result,
+                     plotly_figure)
 from run_state import DEFAULT_MODEL_CHOICE, start_run
 from tools import friendly_status
 
@@ -460,9 +461,9 @@ async def _result_parts(df: Optional[pd.DataFrame], query_id: Optional[str],
         except Exception as e:           # a bad chart must not lose the answer
             captions.append(f"⚠️ Could not render chart: {e}")
 
-    # Single-row results (COUNT, SUM, scalar aggregates): the answer text
-    # already gives the number, so no table and no downloads.
-    if len(df) <= 1:
+    # Scalar results (COUNT, SUM): the answer text already gives the number,
+    # so no table and no downloads.
+    if is_scalar_result(df):
         return elements, captions
 
     elements.append(cl.Dataframe(name="Results", data=df, display="inline"))

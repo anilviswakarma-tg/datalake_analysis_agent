@@ -229,3 +229,24 @@ def test_page_additions_are_configured():
               "fonts/MaterialSymbolsRounded.woff2"):
         assert (SCRIPT_DIR / "public" / f).is_file(), f
 
+
+@pytest.mark.parametrize("frame,scalar", [
+    (pd.DataFrame({"n": [42]}), True),                              # COUNT(*)
+    (pd.DataFrame({"label": ["Sony"], "n": [42]}), True),           # one grouped count
+    (pd.DataFrame({"code": ["x"], "type": ["track"], "us": ["No"]}), False),  # a record
+    (pd.DataFrame({"n": [1, 2]}), False),
+])
+def test_only_scalar_results_lose_their_table(frame, scalar):
+    """A one-product availability sheet is a record the user asked to
+    download; hiding it like a COUNT left them with nothing."""
+    assert results.is_scalar_result(frame) is scalar
+
+
+def test_true_false_columns_are_not_charted():
+    import run_state
+    import tools
+    ctx = run_state.start_run()
+    ctx.dataframe = pd.DataFrame({"code": ["a", "b"], "us": [True, False], "t": ["x", "y"]})
+    assert tools.visualize_results.func("bar", "code", "us").startswith("Not charted")
+    assert tools.visualize_results.func("bar", "code", "t").startswith("Not charted")
+    assert ctx.chart is None

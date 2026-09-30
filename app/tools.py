@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import List
 
+import pandas as pd
 from botocore.exceptions import BotoCoreError, ClientError
 from langchain_core.tools import tool
 
@@ -46,6 +47,9 @@ def get_data_dictionary(tables: str) -> str:
     table. Unknown names come back with the list of documented tables.
     """
     index = _data_dict_index()
+    # Consulted, whatever comes back: the gate in sql_db_query is about the
+    # agent having looked, and an unknown name returns the documented list.
+    current_run().dictionary_loaded = True
     if not index:
         _record("get_data_dictionary", "⚠️ dictionary missing or unreadable")
         return ("The data dictionary at knowledge/data-dictionary/ is missing or "
@@ -404,6 +408,13 @@ def sql_db_query(query: str) -> str:
     """Execute a validated Athena SQL query. Returns success summary +
     preview, or 'ATHENA ERROR: <msg>' (in which case: read the error, fix
     the SQL, re-check, retry)."""
+    if not current_run().dictionary_loaded:
+        _record("sql_db_query", "🛑 blocked: dictionary not loaded")
+        return ("QUERY NOT RUN - you have not loaded the data dictionary in this "
+                "turn. Call get_data_dictionary(tables) first, naming every table "
+                "this query touches (e.g. \"mastermusic, track_active\"), read it, "
+                "then rewrite the query to follow it. The dictionary lists the real "
+                "tables and columns; do not guess them.")
     blocked = check_query_allowed(query)
     if blocked:
         _record("sql_db_query", "\U0001f6d1 blocked: " + blocked.split(" - ")[0].split("\n")[0])
@@ -464,6 +475,11 @@ def visualize_results(chart_type: str, x_column: str, y_column: str, title: str 
         return f"Column {y_column!r} not in results. Available: {list(df.columns)}"
     if chart_type not in CHART_TYPES:
         return f"Invalid chart_type {chart_type!r}. Use one of: {list(CHART_TYPES)}"
+    y = df[y_column]
+    if pd.api.types.is_bool_dtype(y) or not pd.api.types.is_numeric_dtype(y):
+        _record("visualize_results", f"skipped: {y_column!r} is not numeric")
+        return (f"Not charted: {y_column!r} is not a numeric measure, so a chart "
+                f"would show nothing useful. The table is the answer; don't chart it.")
 
     run.chart = {
         "type": chart_type, "x": x_column, "y": y_column,

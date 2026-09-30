@@ -22,7 +22,8 @@ from aws import _fetch_s3_csv
 from catalogue import AGENT_KEYS, AGENTS
 from config import LOGO_FILE, SCRIPT_DIR
 from tools import friendly_status as _friendly_status  # noqa: F401
-from results import chart_frame, df_to_csv_bytes, df_to_excel_bytes
+from results import (chart_frame, df_to_csv_bytes, df_to_excel_bytes,
+                     is_scalar_result)
 
 
 
@@ -140,9 +141,9 @@ def _render_answer(run: dict, i: int, dev: bool) -> None:
     if run.get("chart"):
         render_chart(df, run["chart"])
 
-    # Single-row results (COUNT, SUM, scalar aggregates) — suppress table and
-    # downloads; the AI text already gives the answer.
-    is_single_row = len(df) == 1
+    # Scalar results (COUNT, SUM) — suppress table and downloads; the AI text
+    # already gives the answer. A one-row record still gets both.
+    is_single_row = is_scalar_result(df)
 
     if not is_single_row:
         display_df = df.copy()
