@@ -14,7 +14,7 @@ rule is what keeps the graph acyclic, and `tests/test_wiring.py` enforces it.
 |---|---|---|
 | `config.py` | ~90 | Environment defaults, filesystem paths, database-name accessors. Imports nothing else here. |
 | `access.py` | ~65 | Sign-in rules: allowed domain, shared password, session TTL, container-gated dev bypass. |
-| `catalogue.py` | ~65 | The four landing-page agents and their suggested questions. |
+| `catalogue.py` | ~85 | The four landing-page agents and their suggested questions. Writes `public/agents.json` for the Chainlit page (`python catalogue.py`). |
 | `aws.py` | ~160 | boto3 sessions and clients, credential retry, the Athena query executor, S3 result fetch. The only module that talks to AWS. |
 | `results.py` | ~80 | Chart selection, CSV/Excel export bytes. Framework-free; rendering is in the UI layer. |
 | `run_state.py` | ~150 | The per-run context (inputs + results) handed from agent tools to the UI, and the loop guards. |
@@ -29,7 +29,16 @@ rule is what keeps the graph acyclic, and `tests/test_wiring.py` enforces it.
 | `auth.py` | ~195 | Login screen, SSO/password paths, session expiry, dev bypass. |
 | `app.py` | ~360 | Streamlit page composition and run loop. Being retired. |
 | `chainlit_data.py` | ~75 | Chainlit's SQLAlchemy data layer, fixed to work on any backend. |
-| `chainlit_app.py` | ~430 | Chainlit auth callbacks, chat profiles, model picker, streamed run, chat resume. Entry point. |
+| `chainlit_app.py` | ~440 | Chainlit auth callbacks, model picker, settings, streamed run, chat resume. Entry point. |
+
+**Browser layer (`public/`).** `app.js` and `app.css` redraw the Streamlit
+layout inside Chainlit's page: the hero and agent tiles, per-agent question
+tiles, the sidebar logo / AGENTS list / signed-in footer, the title bar, and
+the chart → table → downloads order in answers. They hook onto Chainlit's
+element ids, not its utility classes; `tests/test_chainlit_app.py` checks
+those ids still exist in the bundled frontend, so re-run it after any
+Chainlit upgrade. Fonts (Source Sans, Material Symbols) are self-hosted
+copies of the ones Streamlit ships.
 
 ### Why the boundaries fall where they do
 

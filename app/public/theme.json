@@ -5,7 +5,8 @@
       "--primary": "16 81% 52%",
       "--ring": "16 81% 52%",
       "--sidebar-primary": "16 81% 52%",
-      "--sidebar-ring": "16 81% 52%"
+      "--sidebar-ring": "16 81% 52%",
+      "--font-sans": "\"Source Sans\", ui-sans-serif, system-ui, sans-serif"
     },
     "dark": {
       "--background": "0 0% 10%",
@@ -19,10 +20,11 @@
       "--primary": "16 81% 52%",
       "--primary-foreground": "0 0% 100%",
       "--ring": "16 81% 52%",
-      "--sidebar-background": "0 0% 8%",
+      "--sidebar-background": "0 0% 13%",
       "--sidebar-primary": "16 81% 52%",
       "--sidebar-accent": "16 60% 16%",
-      "--sidebar-ring": "16 81% 52%"
+      "--sidebar-ring": "16 81% 52%",
+      "--font-sans": "\"Source Sans\", ui-sans-serif, system-ui, sans-serif"
     }
   }
 }

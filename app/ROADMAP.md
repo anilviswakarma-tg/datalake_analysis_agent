@@ -157,14 +157,18 @@ live Athena. The prerequisite is done: run state is a per-run `ContextVar`
 
 Answers to the checks above:
 
-- **Landing page → profiles + starters: yes.** One chat profile per agent plus
-  a default "General", each with its questions as `ChatProfile(starters=...)`.
-  (`@cl.set_starters` can't see the selected profile, so starters live on the
-  profile.) Switching profile starts a new chat, which replaces the per-agent
-  conversation buckets.
-- **Branding: colours, logo, favicon yes; layout no.** `public/theme.json`
-  (HSL variables) and `public/logo_*.png`. The hero/tile layout of the
-  Streamlit landing page is not reproducible without a custom frontend build.
+- **Landing page and branding: kept as they were (2026-09-30).** Chat
+  profiles and starters were tried first and dropped: they meant a header
+  dropdown and pill-shaped suggestions, a visibly different app, and starters
+  always send the default model. Instead `public/app.js` + `public/app.css`
+  redraw the Streamlit layout (hero, agent tiles, question tiles, sidebar
+  AGENTS list and signed-in footer, title bar) from `public/agents.json`,
+  hooking onto Chainlit's element ids. Questions go through the real message
+  box, so they use the picked model. Colours, logo and fonts match the
+  Streamlit theme. What still differs: the model picker and the Dev mode /
+  dry-run switches sit under the message box (⚙️), not in a top bar; the
+  sidebar also lists saved chats; and in dev mode the tool trace shows as
+  steps above the answer instead of tabs.
 - **Tables and downloads: native.** `cl.Dataframe`, `cl.File`. Charts moved
   from Altair to Plotly (`results.plotly_figure`), since Chainlit has no Vega.
 - **Auth: matches.** Password callback (domain + `APP_PASSWORD`), Google

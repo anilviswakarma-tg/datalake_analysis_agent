@@ -4,13 +4,16 @@ Run with:  chainlit run chainlit_app.py
 
 Everything below the UI - agent, tools, run context, AWS, knowledge - is
 shared with the Streamlit app and framework-free. This file maps it onto
-Chainlit: auth callbacks, chat profiles for the four agents, the model
-picker, and the streamed agent run."""
+Chainlit: auth callbacks, the model picker, settings, chat history and the
+streamed agent run. The landing page with the four agents, and the rest of
+the Streamlit-era layout, is drawn in the browser by public/app.js from
+public/agents.json (generated from catalogue.py)."""
 
 from __future__ import annotations
 
 import io
 import logging
+import mimetypes
 import os
 from typing import Any, Dict, List, Optional
 
@@ -24,7 +27,6 @@ import access
 import chat_store
 from agent import build_agent
 from aws import _fetch_s3_csv
-from catalogue import AGENTS
 from chainlit_data import build_data_layer
 from config import DATA_DICT_DIR, FEEDBACK_FILE, _openai_key_looks_real
 from entities import _ENTITY_CACHE
@@ -42,7 +44,11 @@ log = logging.getLogger(__name__)
 if access.in_container():
     os.environ.pop("AWS_PROFILE", None)
 
-GENERAL_PROFILE = "General"
+# Chainlit serves public/ with the type Python guesses, and Windows has no
+# entry for .woff2, so the fonts went out as application/octet-stream -
+# a generic download that antivirus and web filters may hold for scanning.
+mimetypes.add_type("font/woff2", ".woff2")
+
 MAX_HISTORY = 6          # previous exchanges sent back to the model
 RECURSION_LIMIT = 40     # last line of defence; run_state's query budget trips first
 
@@ -112,36 +118,25 @@ if CHAT_DB_URL:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# PROFILES, MODEL PICKER, SETTINGS
+# MODEL PICKER, SETTINGS
 # ═══════════════════════════════════════════════════════════════════════════
 
-@cl.set_chat_profiles
-async def chat_profiles(current_user: Optional[cl.User], language: Optional[str] = None):
-    """One profile per agent, each with its suggested questions as starters.
-    Switching profile starts a new chat, so each agent's conversation (and the
-    history sent to the model) stays its own."""
-    general = cl.ChatProfile(
-        name=GENERAL_PROFILE,
-        markdown_description="Ask your data lake anything - catalogue, plays, "
-                             "users or store metrics.",
-        default=True,
-        starters=[cl.Starter(label=a["questions"][0], message=a["questions"][0])
-                  for a in AGENTS],
-    )
-    return [general] + [
-        cl.ChatProfile(
-            name=a["label"],
-            markdown_description=a["desc"],
-            starters=[cl.Starter(label=q, message=q) for q in a["questions"]],
-        )
-        for a in AGENTS
-    ]
+# Each user's last-used model, so a new chat keeps it (the Streamlit picker
+# held its value for the browser session). In memory: a restart falls back
+# to the default, which is harmless.
+_LAST_MODEL: Dict[str, str] = {}
+
+
+def _user_key() -> Optional[str]:
+    user = cl.user_session.get("user")
+    return user.identifier if user else None
 
 
 def _model_mode() -> cl.Mode:
     """The model picker, shown in the message composer."""
+    current = _LAST_MODEL.get(_user_key() or "", DEFAULT_MODEL_CHOICE)
     return cl.Mode(id="model", name="Model", options=[
-        cl.ModeOption(id=key, name=model_label(key), default=(key == DEFAULT_MODEL_CHOICE))
+        cl.ModeOption(id=key, name=model_label(key), default=(key == current))
         for key in _MODEL_REGISTRY
     ])
 
@@ -479,6 +474,8 @@ async def on_message(message: cl.Message):
 
     dev, live = _dev_mode(), _execute_live()
     model_choice = _selected_model(message)
+    if key := _user_key():
+        _LAST_MODEL[key] = model_choice
     if problem := _preflight_problem(model_choice, live):
         await cl.Message(content=f"⚠️ {problem}").send()
         return

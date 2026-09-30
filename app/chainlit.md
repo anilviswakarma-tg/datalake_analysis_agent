@@ -5,7 +5,7 @@ domains. The agent looks up the data dictionary, writes and runs the Athena
 SQL, then shows you the results, with CSV and Excel downloads for anything
 longer than a single number.
 
-- **Pick an agent** from the menu at the top left to see its suggested questions.
+- **Pick an agent** on the start page or in the sidebar to see its suggested questions.
 - **Pick a model** from the dropdown under the message box.
 - **Dev mode** (the ⚙️ settings) shows the agent's tool calls, SQL and query ids.
 

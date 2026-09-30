@@ -66,8 +66,17 @@ def test_streamlit_auth_shares_the_rules():
 def test_every_agent_is_complete():
     from catalogue import AGENTS
     for a in AGENTS:
-        for field in ("key", "icon", "lucide", "label", "desc", "questions"):
+        for field in ("key", "icon", "label", "desc", "questions"):
             assert a.get(field), f"{a.get('key')} missing {field}"
+        assert a["icon"].startswith(":material/"), a["key"]
+
+
+def test_browser_catalogue_is_up_to_date():
+    """public/agents.json feeds the Chainlit landing page. Regenerate with
+    `python catalogue.py` after editing catalogue.AGENTS."""
+    import catalogue
+    on_disk = catalogue.UI_CATALOGUE_FILE.read_text(encoding="utf-8")
+    assert on_disk == catalogue.ui_catalogue_json(), "run: python catalogue.py"
 
 
 # ── charts ──────────────────────────────────────────────────────────────────
@@ -117,8 +126,24 @@ def test_chainlit_callbacks_are_registered(cl_app):
     from chainlit.config import config
     code = config.code
     for hook in ("on_message", "on_chat_start", "on_settings_update",
-                 "password_auth_callback", "set_chat_profiles"):
+                 "password_auth_callback"):
         assert getattr(code, hook) is not None, hook
+
+
+def test_new_chat_keeps_the_users_last_model(cl_app, monkeypatch):
+    """The Streamlit model picker kept its value; a new chat must too."""
+    import chainlit as cl
+    from models import _MODEL_REGISTRY
+    other = next(k for k in _MODEL_REGISTRY if k != cl_app.DEFAULT_MODEL_CHOICE)
+    monkeypatch.setattr(cl_app, "_user_key", lambda: "a@tunedglobal.com")
+
+    def default_of(mode):
+        return [o.id for o in mode.options if o.default]
+
+    assert default_of(cl_app._model_mode()) == [cl_app.DEFAULT_MODEL_CHOICE]
+    cl_app._LAST_MODEL["a@tunedglobal.com"] = other
+    assert default_of(cl_app._model_mode()) == [other]
+    assert "_LAST_MODEL[key] = model_choice" in inspect.getsource(cl_app.on_message)
 
 
 def test_chainlit_run_starts_a_run_context(cl_app):
@@ -148,3 +173,45 @@ def test_chainlit_session_timeout_matches_access_ttl():
     assert cfg["project"]["user_session_timeout"] == access.SESSION_TTL_SECONDS
     # SQLite can't store the tag list the SQLAlchemy data layer writes
     assert cfg["features"]["auto_tag_thread"] is False
+
+
+# ── the browser layer (public/app.js, public/app.css) ───────────────────────
+# They reproduce the Streamlit layout by hooking onto element ids and a few
+# semantic class names in Chainlit's bundled frontend. A Chainlit upgrade
+# that renames one breaks the page silently, so check they still exist.
+
+def _frontend_bundle() -> str:
+    from pathlib import Path
+    import chainlit
+    assets = Path(chainlit.__file__).parent / "frontend" / "dist" / "assets"
+    return "".join(p.read_text(encoding="utf-8", errors="ignore")
+                   for p in assets.glob("index-*.js"))
+
+
+@pytest.mark.parametrize("hook", [
+    '"welcome-screen"', '"header"', '"chat-input"', '"chat-submit"',
+    '"new-chat-button"', '"thread-history"', '"readme-button"', '"theme-toggle"',
+    '"user-nav-button"', "mode-picker-trigger-", '"data-sidebar":"sidebar"',
+    "message-content", "inline-plotly-container",
+])
+def test_chainlit_frontend_still_has_what_app_js_hooks_onto(hook):
+    assert hook in _frontend_bundle(), hook
+
+
+def test_fonts_are_served_as_fonts(cl_app):
+    import mimetypes
+    assert mimetypes.guess_type("x.woff2")[0] == "font/woff2"
+
+
+def test_page_additions_are_configured():
+    import tomllib
+    from config import SCRIPT_DIR
+    ui = tomllib.loads((SCRIPT_DIR / ".chainlit" / "config.toml")
+                       .read_text(encoding="utf-8"))["UI"]
+    assert ui["custom_js"] == "/public/app.js"
+    assert ui["custom_css"] == "/public/app.css"
+    # Picking an agent in the sidebar opens a new chat without a dialog
+    assert ui["confirm_new_chat"] is False
+    for f in ("app.js", "app.css", "agents.json", "fonts/SourceSansVF-Upright.woff2",
+              "fonts/MaterialSymbolsRounded.woff2"):
+        assert (SCRIPT_DIR / "public" / f).is_file(), f

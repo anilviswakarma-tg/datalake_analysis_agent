@@ -138,7 +138,7 @@ layout = "wide"
 # default_chat_settings_open = false
 
 # Whether to prompt user confirmation on clicking 'New Chat'
-confirm_new_chat = true
+confirm_new_chat = false
 
 # Description of the assistant. This is used for HTML tags.
 # description = ""
@@ -155,7 +155,7 @@ custom_css = "/public/app.css"
 
 # Specify a JavaScript file that can be used to customize the user interface.
 # The JavaScript file can be served from the public directory.
-# custom_js = "/public/test.js"
+custom_js = "/public/app.js"
 
 # The style of alert boxes. Can be "classic" or "modern".
 alert_style = "classic"

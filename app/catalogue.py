@@ -7,11 +7,13 @@ data for non-technical users, and keeps each agent's conversation separate.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 AGENTS = [
     {
         "key": "catalogue",
-        "icon": ":material/library_music:",   # Streamlit Material icon
-        "lucide": "library",                   # Chainlit (Lucide) icon
+        "icon": ":material/library_music:",   # Material Symbols, in both UIs
         "label": "Master catalogue agent",
         "desc": "Track & product counts by label, territory and ingestion date.",
         "questions": [
@@ -23,7 +25,6 @@ AGENTS = [
     {
         "key": "playlogs",
         "icon": ":material/play_circle:",
-        "lucide": "circle-play",
         "label": "Logs and Streams agent",
         "desc": "Play and fetch log volumes by client and time period.",
         "questions": [
@@ -34,7 +35,6 @@ AGENTS = [
     {
         "key": "users",
         "icon": ":material/group:",
-        "lucide": "users",
         "label": "Users and Subscriptions agent",
         "desc": "New users, subscriptions and playlist counts per client.",
         "questions": [
@@ -46,7 +46,6 @@ AGENTS = [
     {
         "key": "client_active",
         "icon": ":material/album:",
-        "lucide": "disc-3",
         "label": "Client catalogue agent",
         "desc": "Active catalogue sizes and label breakdowns per client.",
         "questions": [
@@ -57,3 +56,24 @@ AGENTS = [
 ]
 
 AGENT_KEYS = {a["key"] for a in AGENTS}
+
+# The Chainlit page draws the landing tiles and sidebar list in the browser
+# (public/app.js), so it reads the catalogue as a static file. Regenerate it
+# after editing AGENTS:  python catalogue.py   (a test fails if it drifts).
+UI_CATALOGUE_FILE = Path(__file__).parent / "public" / "agents.json"
+
+
+def ui_catalogue() -> list:
+    """AGENTS as the browser needs them: the bare Material icon name."""
+    return [{"key": a["key"], "icon": a["icon"].removeprefix(":material/").rstrip(":"),
+             "label": a["label"], "desc": a["desc"], "questions": a["questions"]}
+            for a in AGENTS]
+
+
+def ui_catalogue_json() -> str:
+    return json.dumps(ui_catalogue(), indent=2, ensure_ascii=False) + "\n"
+
+
+if __name__ == "__main__":
+    UI_CATALOGUE_FILE.write_text(ui_catalogue_json(), encoding="utf-8")
+    print(f"wrote {UI_CATALOGUE_FILE}")

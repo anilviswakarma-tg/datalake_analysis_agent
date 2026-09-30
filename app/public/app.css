@@ -1,5 +1,134 @@
-/* Tuned Global tweaks on top of public/theme.json. Chainlit's class names are
-   not a stable API, so keep this file small and re-check it after upgrades. */
+/* Tuned Global styling on top of public/theme.json, carrying over the
+   Streamlit app's look (assets/app.css) so the move to Chainlit is not a
+   redesign. The dl-* classes belong to public/app.js; everything else is
+   targeted by the element ids Chainlit gives its components, never by its
+   utility class names. Re-check after a Chainlit upgrade. */
 
-/* Internal, non-technical audience: hide the framework watermark. */
-a[href*="chainlit.io"] { display: none !important; }
+/* ── fonts: the ones the Streamlit app used, self-hosted ── */
+@font-face {
+  font-family: "Source Sans"; font-style: normal; font-weight: 200 900; font-display: swap;
+  src: url("fonts/SourceSansVF-Upright.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Source Sans"; font-style: italic; font-weight: 200 900; font-display: swap;
+  src: url("fonts/SourceSansVF-Italic.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Material Symbols Rounded"; font-style: normal; font-weight: 400; font-display: block;
+  src: url("fonts/MaterialSymbolsRounded.woff2") format("woff2");
+}
+/* --font-sans is set in theme.json: Chainlit writes theme variables inline
+   on <html>, which a stylesheet rule here would lose to. */
+body { font-family: var(--font-sans); }
+
+/* The Streamlit sidebar was 300px; Chainlit's is 16rem, which wraps the
+   longer agent names. Chainlit sets the width inline, hence the selector. */
+[style*="--sidebar-width:"] { --sidebar-width: 18.75rem !important; }
+
+.dl-icon {
+  font-family: "Material Symbols Rounded"; font-weight: normal; font-style: normal;
+  line-height: 1; letter-spacing: normal; text-transform: none; white-space: nowrap;
+  direction: ltr; -webkit-font-smoothing: antialiased; font-feature-settings: "liga";
+  display: inline-block; flex-shrink: 0;
+  /* A fixed square: until the icon font arrives (or if it never does) the
+     ligature is the icon's name, e.g. "library_music", and would otherwise
+     take that much width and push the labels across. */
+  width: 1em; height: 1em; overflow: hidden; text-align: center;
+  visibility: hidden;          /* shown once the font has loaded (app.js) */
+}
+html.dl-icons-ready .dl-icon { visibility: visible; }
+
+/* Internal, non-technical audience: hide the framework watermark, and the
+   header buttons the Streamlit app never had. The account menu moves to
+   the sidebar footer (app.js). */
+a[href*="chainlit.io"],
+#readme-button, #theme-toggle, #user-nav-button { display: none !important; }
+
+/* ── title bar (order: after the sidebar buttons Chainlit adds when collapsed) ── */
+.dl-title { order: 1; font-size: 21px; font-weight: 700; color: rgb(205,205,205); padding: 0 8px; white-space: nowrap; }
+
+/* ── welcome screen: hero and tiles at the top, message box at the bottom ── */
+#welcome-screen {
+  justify-content: flex-start !important; align-items: stretch !important;
+  margin-top: 0 !important; padding-top: 24px;
+}
+#welcome-screen > img.logo { display: none; }
+#welcome-screen > .dl-landing + * , #welcome-screen > img.logo + * { margin-top: auto; }
+
+.dl-landing { display: flex; flex-direction: column; align-items: flex-start; width: 100%; }
+
+.dl-hero-badge {
+  display: inline-block; background: rgba(232,84,32,0.15); color: #E85420;
+  font-size: 12px; font-weight: 600; letter-spacing: 0.5px; padding: 4px 12px; border-radius: 100px;
+}
+.dl-hero-title { font-size: 34px; font-weight: 800; line-height: 1.15; color: rgb(210,210,210); margin: 16px 0 12px; }
+.dl-hero-desc { font-size: 16px; color: #9A9A9A; line-height: 1.6; max-width: 660px; margin-bottom: 18px; }
+
+.dl-section-title { font-size: 24px; font-weight: 800; color: rgb(212,212,212); margin: 18px 0 2px; }
+.dl-section-sub { font-size: 14px; color: #9A9A9A; margin: 0 0 18px; }
+
+.dl-back {
+  border: 1px solid #E85420; border-radius: 8px; padding: 7px 36px;
+  color: rgb(200,200,200); background: transparent; font-size: 14px; cursor: pointer;
+}
+.dl-back:hover { border-color: #D04818; color: #E85420; }
+
+.dl-tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; width: 100%; }
+@media (max-width: 640px) { .dl-tiles { grid-template-columns: 1fr; } }
+
+.dl-tile {
+  display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 14px;
+  background: #222222; border: 1px solid #3a3a3a; border-radius: 12px;
+  padding: 13px 16px; min-height: 72px; text-align: left; cursor: pointer;
+  color: rgb(200,200,200); font-size: 14px; font-weight: 500;
+}
+.dl-tile:hover { border-color: #4a4a4a; background: #262626; color: rgb(215,215,215); }
+.dl-tile:active, .dl-tile:focus-visible { border-color: #E85420; outline: none; }
+.dl-tile .dl-icon { color: #E85420; font-size: 24px; }
+.dl-agent-tiles .dl-tile { gap: 20px; }
+.dl-agent-tiles .dl-icon { font-size: 37px; }
+.dl-tile-text { display: flex; flex-direction: column; min-width: 0; }
+.dl-tile strong { font-size: 15px; color: rgb(220,220,220); font-weight: 700; line-height: 1.2; }
+.dl-tile-desc { color: #9A9A9A; font-weight: 400; font-size: 13px; line-height: 1.3; margin-top: 2px; }
+
+/* ── sidebar: logo, AGENTS list, footer ── */
+.dl-sb-nav { padding: 0 12px; }
+.dl-sb-logo { padding: 0 2px 14px; margin-bottom: 6px; border-bottom: 1px solid #333333; }
+.dl-sb-logo img { width: 100%; max-width: 200px; height: auto; display: block; }
+.dl-sb-label {
+  font-size: 12px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase;
+  color: #7f7878; padding: 10px 6px 8px;
+}
+.dl-sb-item {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: transparent; border: none; border-bottom: 1px solid #333333; border-radius: 0;
+  color: rgb(230,230,230); font-weight: 700; font-size: 14px; line-height: 1.3;
+  padding: 12px 12px; cursor: pointer; box-shadow: inset 2px 0 0 transparent;
+}
+.dl-sb-item:hover { background: rgba(255,255,255,0.05); color: rgb(245,245,245); }
+.dl-sb-item.dl-active {
+  background: rgba(232,84,32,0.15); color: rgb(212,212,212);
+  box-shadow: inset 2px 0 0 #E85420; border-radius: 8px;
+}
+.dl-sb-item .dl-icon { color: rgb(205,205,205); font-size: 19px; }
+
+.dl-sb-footer { margin: auto 16px 14px; border-top: 1px solid #333333; padding-top: 12px; }
+.dl-sb-user {
+  display: flex; align-items: center; gap: 6px; color: #B5B5B5; font-size: 14px; padding: 2px 6px 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dl-sb-user span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.dl-sb-user .dl-icon { font-size: 18px; color: #9A9A9A; }
+.dl-sb-signout {
+  width: 100%; margin-top: 10px; padding: 8px; border-radius: 8px; cursor: pointer;
+  background: transparent; border: 1px solid #404040; color: #9A9A9A; font-size: 13px; font-weight: 500;
+}
+.dl-sb-signout:hover { border-color: #E85420; color: #E85420; }
+
+/* ── answers: chart, then table, then downloads, as in the Streamlit app.
+   Chainlit groups a message's elements by type in a fixed order (files,
+   chart, table); message-content and inline-plotly-container are its own
+   semantic class names, not utility classes. ── */
+.message-content > * > :has(.inline-plotly-container) { order: -2; }
+.message-content > * > :has(table) { order: -1; }
+.inline-plotly-container { max-width: none !important; width: 100%; }
