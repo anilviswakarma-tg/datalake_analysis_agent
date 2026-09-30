@@ -185,3 +185,96 @@ def test_chainlit_still_has_the_private_hooks_resume_relies_on():
     assert "persist" in inspect.signature(Element._create).parameters
     src = inspect.getsource(socket.connection_successful)
     assert src.index("on_chat_resume(thread)") < src.index("emitter.resume_thread(thread)")
+
+
+# ── saved chats and the retention sweep ─────────────────────────────────────
+
+def _retention_db(tmp_path):
+    """Four chats, 'now' being 2026-09-30:
+    old      - last message 90 days ago, unsaved      -> swept
+    kept     - last message 90 days ago, saved        -> kept
+    active   - created 90 days ago, message yesterday -> kept (still in use)
+    new      - created yesterday                      -> kept"""
+    import sqlalchemy as sa
+    url = f"sqlite+aiosqlite:///{(tmp_path / 'r.db').as_posix()}"
+    old, recent = "2026-07-02T00:00:00.000000Z", "2026-09-29T00:00:00.000000Z"
+    t, s, f = (chat_store.SCHEMA.tables[n] for n in ("threads", "steps", "feedbacks"))
+
+    async def build():
+        await chat_store.ensure_schema(url)
+        async with chat_store._engine(url).begin() as conn:
+            for tid, created in (("old", old), ("kept", old), ("active", old), ("new", recent)):
+                await conn.execute(t.insert().values(id=tid, createdAt=created, name=tid,
+                                                     userIdentifier="a@tunedglobal.com"))
+            for tid, when in (("old", old), ("kept", old), ("active", recent), ("new", recent)):
+                await conn.execute(s.insert().values(id=f"s-{tid}", name="user", type="user_message",
+                                                     threadId=tid, streaming=False, createdAt=when))
+            await conn.execute(f.insert().values(id="f-old", forId="s-old", threadId="old", value=1))
+        await chat_store.set_saved(url, "kept", "a@tunedglobal.com", True)
+    return url, build, (t, s, f)
+
+
+def test_sweep_deletes_only_idle_unsaved_chats(tmp_path):
+    from datetime import datetime, timezone
+    import sqlalchemy as sa
+    url, build, (t, s, f) = _retention_db(tmp_path)
+    now = datetime(2026, 9, 30, tzinfo=timezone.utc)
+
+    async def go():
+        await build()
+        removed = await chat_store.purge_expired(url, days=60, now=now)
+        again = await chat_store.purge_expired(url, days=60, now=now)   # idempotent
+        async with chat_store._engine(url).connect() as conn:
+            threads = {r[0] for r in await conn.execute(sa.select(t.c.id))}
+            steps = {r[0] for r in await conn.execute(sa.select(s.c.threadId))}
+            feedback = list(await conn.execute(sa.select(f.c.id)))
+        await chat_store._engine(url).dispose()
+        return removed, again, threads, steps, feedback
+
+    removed, again, threads, steps, feedback = asyncio.run(go())
+    assert (removed, again) == (1, 0)
+    assert threads == steps == {"kept", "active", "new"}
+    assert feedback == []                       # children go too, not orphaned
+
+
+def test_retention_off_keeps_everything(tmp_path):
+    from datetime import datetime, timezone
+    url, build, _ = _retention_db(tmp_path)
+
+    async def go():
+        await build()
+        n = await chat_store.purge_expired(url, days=0,
+                                           now=datetime(2027, 1, 1, tzinfo=timezone.utc))
+        await chat_store._engine(url).dispose()
+        return n
+    assert asyncio.run(go()) == 0
+
+
+def test_saving_and_unsaving_a_chat(tmp_path):
+    url, build, _ = _retention_db(tmp_path)
+
+    async def go():
+        await build()
+        a, b = "a@tunedglobal.com", "b@tunedglobal.com"
+        await chat_store.set_saved(url, "old", a, True)
+        await chat_store.set_saved(url, "old", a, True)          # twice is fine
+        both = await chat_store.saved_thread_ids(url, a)
+        others = await chat_store.saved_thread_ids(url, b)
+        await chat_store.set_saved(url, "kept", a, False)
+        after = await chat_store.saved_thread_ids(url, a)
+        await chat_store._engine(url).dispose()
+        return both, others, after
+
+    both, others, after = asyncio.run(go())
+    assert both == {"old", "kept"}
+    assert others == set()
+    assert after == {"old"}
+
+
+@pytest.mark.parametrize("value,days", [(None, 60), ("90", 90), ("0", 0), ("-5", 0), ("x", 60)])
+def test_retention_days_setting(monkeypatch, value, days):
+    if value is None:
+        monkeypatch.delenv("CHAT_RETENTION_DAYS", raising=False)
+    else:
+        monkeypatch.setenv("CHAT_RETENTION_DAYS", value)
+    assert chat_store.retention_days() == days

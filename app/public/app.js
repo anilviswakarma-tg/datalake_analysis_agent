@@ -20,6 +20,7 @@
 
   var agents = [];
   var user = null;
+  var bypassed = false;     // signed in by the local DEV_SKIP_AUTH bypass
   var selected = null;
   try { selected = sessionStorage.getItem(STORE_KEY); } catch (e) { /* private mode */ }
 
@@ -189,22 +190,154 @@
       var left = header.firstElementChild;
       if (left) left.appendChild(el("div", "dl-title", "🎵 Data Lake Agent"));
     }
+    // Permanent, as in the Streamlit app: a toast is too easy to miss for
+    // "anyone can use this without signing in".
+    if (header && bypassed && !header.querySelector(".dl-bypass")) {
+      var banner = el("div", "dl-bypass");
+      banner.appendChild(el("strong", null, "🔓 Auth bypassed"));
+      banner.appendChild(document.createTextNode(" — "));
+      banner.appendChild(el("code", null, "DEV_SKIP_AUTH=true"));
+      banner.appendChild(document.createTextNode(
+        " is set. Local development only; unset it in "));
+      banner.appendChild(el("code", null, ".env"));
+      banner.appendChild(document.createTextNode(" to restore the login screen."));
+      banner.title = banner.textContent;       // full text when it is cut short
+      header.appendChild(banner);
+    }
     var input = document.getElementById("chat-input");
     if (input && input.getAttribute("placeholder") !== PLACEHOLDER) {
       input.setAttribute("placeholder", PLACEHOLDER);
     }
   }
 
-  // Opening a saved chat from the list leaves the agent view.
+  // Opening an earlier chat from the list leaves the agent view.
   document.addEventListener("click", function (e) {
     var t = e.target.closest && e.target.closest('[id^="thread-"]');
     if (t && t.id !== "thread-history" && selected) select(null);
   }, true);
 
+  // ── saving a chat from the retention sweep (chainlit_app.py) ────────────
+  // Unsaved chats are deleted after RETENTION_DAYS without activity. The
+  // open chat gets a Save button in the title bar; saved ones get a star in
+  // the chat list, drawn by a generated stylesheet so Chainlit's own list
+  // items are never touched.
+  var saved = null;            // Set of saved chat ids, once loaded
+  var retentionDays = 0;
+  var starSheet = null;
+
+  function currentChatId() {
+    var m = window.location.pathname.match(/\/thread\/([^/?#]+)/);
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+
+  function takeSavedState(state) {
+    if (!state || !state.saved) return;
+    saved = new Set(state.saved);
+    retentionDays = state.retention_days || 0;
+    if (!starSheet) {
+      starSheet = el("style");
+      document.head.appendChild(starSheet);
+    }
+    starSheet.textContent = Array.from(saved).map(function (id) {
+      return '[id="thread-' + id.replace(/["\\]/g, "") + '"] button > span::before';
+    }).join(",\n") + (saved.size ? " { content: \"\\2605\"; color: #E85420; }" : "");
+    var b = document.querySelector(".dl-save");
+    if (b) b.remove();                      // redrawn by apply()
+    schedule();
+  }
+
+  function postSaved(path, body) {
+    return fetch(BASE + "datalake/saved" + path, {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body || {})
+    }).then(function (r) { return r.ok ? r.json() : null; });
+  }
+
+  function applySaveButton() {
+    var header = document.getElementById("header");
+    var id = currentChatId();
+    var existing = header && header.querySelector(".dl-save");
+    if (!header || !saved || !retentionDays || !id) {
+      if (existing) existing.remove();
+      return;
+    }
+    var isSaved = saved.has(id);
+    if (existing && existing.dataset.chat === id && existing.dataset.saved === String(isSaved)) return;
+    if (existing) existing.remove();
+    var b = el("button", "dl-save" + (isSaved ? " dl-saved" : ""),
+               isSaved ? "\u2605 Saved" : "\u2606 Save chat");
+    b.type = "button";
+    b.dataset.chat = id;
+    b.dataset.saved = String(isSaved);
+    b.title = isSaved
+      ? "Kept until you unsave it."
+      : "Unsaved chats are deleted after " + retentionDays + " days without activity.";
+    b.addEventListener("click", function () {
+      b.disabled = true;
+      setSaved(id, !isSaved).catch(function () { b.disabled = false; });
+    });
+    header.appendChild(b);
+  }
+
+  function setSaved(id, save) {
+    return postSaved("/" + encodeURIComponent(id), { saved: save }).then(takeSavedState);
+  }
+
+  // The same toggle in each chat's ⋯ menu in the sidebar. The menu opens in
+  // a portal with no link back to its chat, so remember which chat's ⋯ was
+  // pressed (Radix opens on pointerdown).
+  var menuChatId = null;
+  document.addEventListener("pointerdown", function (e) {
+    var opts = e.target.closest && e.target.closest("#thread-options");
+    // parentElement: the ⋯ button's own id is "thread-options"
+    var item = opts && opts.parentElement.closest('[id^="thread-"]');
+    if (item) menuChatId = item.id.replace(/^thread-/, "");
+  }, true);
+
+  function applyChatMenu() {
+    var rename = document.getElementById("rename-thread");
+    if (!rename || !saved || !retentionDays || !menuChatId) return;
+    var menu = rename.parentNode;
+    var id = menuChatId;
+    var isSaved = saved.has(id);
+    var existing = menu.querySelector(":scope > .dl-menu-save");
+    if (existing && existing.dataset.chat === id && existing.dataset.saved === String(isSaved)) return;
+    if (existing) existing.remove();
+    var item = el("div", rename.className + " dl-menu-save");
+    item.setAttribute("role", "menuitem");
+    item.tabIndex = -1;
+    item.dataset.chat = id;
+    item.dataset.saved = String(isSaved);
+    item.title = rename.title;
+    item.appendChild(el("span", null, isSaved ? "Unsave" : "Save"));
+    item.appendChild(el("span", "dl-menu-star", isSaved ? "★" : "☆"));
+    item.addEventListener("click", function (e) {
+      e.stopPropagation();
+      setSaved(id, !isSaved).catch(function () { /* unchanged */ });
+      closeMenu(menu);
+    });
+    menu.insertBefore(item, menu.firstChild);
+  }
+
+  // Our item isn't one of Radix's, so it can't close the menu for us, and a
+  // menu left open keeps the page blocked (Radix disables pointer events
+  // outside it). Escape first; if that didn't take, a press outside it.
+  function closeMenu(menu) {
+    var target = menu.contains(document.activeElement) ? document.activeElement : menu;
+    target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    setTimeout(function () {
+      if (!menu.isConnected) return;
+      document.body.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    }, 50);
+  }
+
   var queued = false;
   function apply() {
     queued = false;
     applyHeader();
+    applySaveButton();
+    applyChatMenu();
     applySidebar();
     applyLanding();
   }
@@ -223,8 +356,12 @@
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (u) {
         user = u && (u.display_name || u.identifier);
-        if (user) schedule();
-        else if (attempt < 5) setTimeout(function () { loadUser(attempt + 1); }, 1500);
+        bypassed = !!(u && u.metadata && u.metadata.auth_method === "dev-bypass");
+        if (user) {
+          schedule();
+          // 404 when chat history is off: no Save button then.
+          postSaved("").then(takeSavedState).catch(function () { /* no saving */ });
+        } else if (attempt < 5) setTimeout(function () { loadUser(attempt + 1); }, 1500);
       })
       .catch(function () { /* no footer */ });
   }

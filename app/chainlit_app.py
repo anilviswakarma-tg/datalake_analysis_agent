@@ -11,6 +11,7 @@ public/agents.json (generated from catalogue.py)."""
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import mimetypes
@@ -18,10 +19,15 @@ import os
 from typing import Any, Dict, List, Optional
 
 import chainlit as cl
-from chainlit.config import config as cl_config
+import chainlit.server as cl_server
 import pandas as pd
+from chainlit.config import config as cl_config
+from chainlit.data.acl import is_thread_author
 from chainlit.input_widget import Switch
+from chainlit.server import UserParam
 from chainlit.utils import utc_now
+from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 
 import access
 import chat_store
@@ -49,7 +55,7 @@ if access.in_container():
 # a generic download that antivirus and web filters may hold for scanning.
 mimetypes.add_type("font/woff2", ".woff2")
 
-MAX_HISTORY = 6          # previous exchanges sent back to the model
+MAX_HISTORY = 25         # previous exchanges sent back to the model
 RECURSION_LIMIT = 40     # last line of defence; run_state's query budget trips first
 
 
@@ -107,14 +113,57 @@ if access.dev_bypass_requested():
 
 CHAT_DB_URL = chat_store.chat_db_url()
 
+RETENTION_SWEEP_SECONDS = 24 * 60 * 60
+
+
+async def _retention_sweep() -> None:
+    """Delete unsaved chats idle past chat_store.retention_days(), now and
+    then daily. A failed sweep is logged and retried the next day."""
+    while True:
+        try:
+            removed = await chat_store.purge_expired(CHAT_DB_URL)
+            if removed:
+                log.info("chat retention: deleted %d unsaved chats", removed)
+        except Exception:
+            log.exception("chat retention sweep failed")
+        await asyncio.sleep(RETENTION_SWEEP_SECONDS)
+
+
 if CHAT_DB_URL:
     @cl.on_app_startup
     async def create_history_schema():
         await chat_store.ensure_schema(CHAT_DB_URL)
+        if chat_store.retention_days():
+            asyncio.get_running_loop().create_task(_retention_sweep())
 
     @cl.data_layer
     def history_data_layer():
         return build_data_layer(CHAT_DB_URL)
+
+    # Saving a chat, for public/app.js. POST only: Chainlit's catch-all page
+    # route is GET, so a GET here would never be reached.
+    async def _saved_state(user: Any) -> JSONResponse:
+        ids = await chat_store.saved_thread_ids(CHAT_DB_URL, user.identifier)
+        return JSONResponse({"saved": sorted(ids),
+                             "retention_days": chat_store.retention_days()})
+
+    async def list_saved_chats(current_user: UserParam):
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        return await _saved_state(current_user)
+
+    async def save_chat(thread_id: str, payload: Dict[str, bool], current_user: UserParam):
+        if not current_user:
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        await is_thread_author(current_user.identifier, thread_id)   # 401/404 otherwise
+        await chat_store.set_saved(CHAT_DB_URL, thread_id, current_user.identifier,
+                                   bool(payload.get("saved")))
+        return await _saved_state(current_user)
+
+    _root = cl_config.run.root_path or ""
+    cl_server.app.add_api_route(f"{_root}/datalake/saved", list_saved_chats, methods=["POST"])
+    cl_server.app.add_api_route(f"{_root}/datalake/saved/{{thread_id}}", save_chat,
+                                methods=["POST"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -184,12 +233,9 @@ async def _start_session(history: List[Dict[str, str]]) -> None:
 async def on_chat_start():
     await _start_session([])
 
-    # Toasts, not messages: a message would hide the starters.
-    user = cl.user_session.get("user")
-    if user and (user.metadata or {}).get("auth_method") == "dev-bypass":
-        await cl.context.emitter.send_toast(
-            "Auth bypassed - DEV_SKIP_AUTH=true is set. Local development only.",
-            type="warning")
+    # A toast, not a message: a message would hide the landing page. The
+    # dev-bypass warning is a permanent banner instead (public/app.js, from
+    # the user's auth_method), as in the Streamlit app.
     if not DATA_DICT_DIR.exists() or not any(DATA_DICT_DIR.glob("*.md")):
         await cl.context.emitter.send_toast(
             f"Data dictionary missing or empty ({DATA_DICT_DIR}). Answers will be "

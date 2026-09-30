@@ -192,10 +192,23 @@ def _frontend_bundle() -> str:
     '"welcome-screen"', '"header"', '"chat-input"', '"chat-submit"',
     '"new-chat-button"', '"thread-history"', '"readme-button"', '"theme-toggle"',
     '"user-nav-button"', "mode-picker-trigger-", '"data-sidebar":"sidebar"',
-    "message-content", "inline-plotly-container",
+    "message-content", "inline-plotly-container", '"thread-options"', '"rename-thread"',
 ])
 def test_chainlit_frontend_still_has_what_app_js_hooks_onto(hook):
     assert hook in _frontend_bundle(), hook
+
+
+def test_save_chat_routes_are_post_and_signed_in(cl_app):
+    """GET would lose to Chainlit's catch-all page route, and both must
+    require a signed-in user; saving also checks the chat's owner."""
+    import chainlit.server as server
+    routes = {(r.path, tuple(sorted(r.methods))) for r in server.app.routes
+              if getattr(r, "path", "").endswith(("/datalake/saved", "/datalake/saved/{thread_id}"))}
+    assert {m for _, m in routes} == {("POST",)}
+    assert len({p for p, _ in routes}) == 2
+    src = inspect.getsource(cl_app.save_chat)
+    assert "is_thread_author(current_user.identifier, thread_id)" in src
+    assert src.index("is_thread_author") < src.index("set_saved")
 
 
 def test_fonts_are_served_as_fonts(cl_app):
@@ -215,3 +228,4 @@ def test_page_additions_are_configured():
     for f in ("app.js", "app.css", "agents.json", "fonts/SourceSansVF-Upright.woff2",
               "fonts/MaterialSymbolsRounded.woff2"):
         assert (SCRIPT_DIR / "public" / f).is_file(), f
+

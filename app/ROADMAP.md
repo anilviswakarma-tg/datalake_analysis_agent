@@ -184,6 +184,12 @@ Answers to the checks above:
   a snapshot saved with each answer, so no blob store is needed — Phase 1's
   design, implemented.
 
+- **Retention (2026-09-30).** Chats are deleted after 60 days without
+  activity (`CHAT_RETENTION_DAYS`) unless the user saves them with the title
+  bar's Save chat button; saved chats show a star in the chat list. The
+  sweep runs at startup and daily. The model is sent the last 25 exchanges
+  of a chat (`MAX_HISTORY`).
+
 Remaining before Streamlit can be removed: make Chainlit the `Dockerfile`
 default (`docker-compose.yml` now runs both, Chainlit on 8000 with the
 `data/` volume), and restrict `allow_origins` in `.chainlit/config.toml` to
