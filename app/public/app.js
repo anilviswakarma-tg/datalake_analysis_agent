@@ -146,7 +146,7 @@
         b.addEventListener("click", function () { openAgent(a.key); });
         nav.appendChild(b);
       });
-      nav.appendChild(el("div", "dl-sb-label", "Chats"));
+      nav.appendChild(el("div", "dl-sb-label dl-sb-chats-label", "Chats"));
       history.parentNode.insertBefore(nav, history);
     }
     nav.querySelectorAll(".dl-sb-item").forEach(function (b) {
@@ -216,12 +216,12 @@
     if (t && t.id !== "thread-history" && selected) select(null);
   }, true);
 
-  // ── saving a chat from the retention sweep (chainlit_app.py) ────────────
-  // Unsaved chats are deleted after RETENTION_DAYS without activity. The
-  // open chat gets a Save button in the title bar; saved ones get a star in
-  // the chat list, drawn by a generated stylesheet so Chainlit's own list
-  // items are never touched.
-  var saved = null;            // Set of saved chat ids, once loaded
+  // ── favourite chats, kept from the retention sweep (chainlit_app.py) ────
+  // Chats that aren't favourites (favourite_threads) are deleted after
+  // RETENTION_DAYS without activity. The open chat gets a Favourite toggle in
+  // the title bar; favourites get a star in the chat list, drawn by a
+  // generated stylesheet so Chainlit's own list items are never touched.
+  var favourites = null;       // Set of favourite chat ids, once loaded
   var retentionDays = 0;
   var starSheet = null;
 
@@ -230,58 +230,116 @@
     return m ? decodeURIComponent(m[1]) : null;
   }
 
-  function takeSavedState(state) {
-    if (!state || !state.saved) return;
-    saved = new Set(state.saved);
+  var favList = [];            // [{id, name}], newest favourite first
+
+  function takeFavourites(state) {
+    if (!state || !state.favourites) return;
+    favList = state.favourites;
+    favourites = new Set(favList.map(function (f) { return f.id; }));
     retentionDays = state.retention_days || 0;
     if (!starSheet) {
       starSheet = el("style");
       document.head.appendChild(starSheet);
     }
-    starSheet.textContent = Array.from(saved).map(function (id) {
-      return '[id="thread-' + id.replace(/["\\]/g, "") + '"] button > span::before';
-    }).join(",\n") + (saved.size ? " { content: \"\\2605\"; color: #E85420; }" : "");
-    var b = document.querySelector(".dl-save");
+    // Favourites move to their own section (applyFavouritesSection), so take
+    // them out of Chainlit's date-grouped list, and hide a date heading left
+    // with nothing under it. The hidden items stay in the page: opening a
+    // favourite clicks its link there.
+    var ids = favList.map(function (f) { return '[id="thread-' + f.id.replace(/["\\]/g, "") + '"]'; });
+    starSheet.textContent = ids.length
+      ? ids.join(",\n") + " { display: none; }\n" +
+        '[data-sidebar="group"]:has([data-sidebar="menu-item"])' +
+        ':not(:has([data-sidebar="menu-item"]' +
+        ids.map(function (s) { return ":not(" + s + ")"; }).join("") + ")) { display: none; }"
+      : "";
+    var b = document.querySelector(".dl-fav");
     if (b) b.remove();                      // redrawn by apply()
+    var section = document.querySelector(".dl-sb-favs");
+    if (section) section.remove();          // redrawn by apply()
     schedule();
   }
 
-  function postSaved(path, body) {
-    return fetch(BASE + "datalake/saved" + path, {
+  // Open a chat the way Chainlit's own list does (no page reload), via its
+  // hidden link; fall back to the URL when the list hasn't loaded that far.
+  function openChat(id) {
+    var link = document.querySelector('[id="thread-' + id + '"] a');
+    if (link) link.click();
+    else window.location.href = BASE + "thread/" + encodeURIComponent(id);
+  }
+
+  function chatName(f) {
+    // Chainlit's list has the live name (after a rename); ours is from load.
+    var live = document.querySelector('[id="thread-' + f.id + '"] .truncate');
+    return (live && live.textContent.trim()) || f.name || "Untitled chat";
+  }
+
+  function applyFavouritesSection() {
+    var nav = document.querySelector(".dl-sb-nav");
+    if (!nav || !favourites) return;
+    var chatsLabel = nav.querySelector(".dl-sb-chats-label");
+    var section = nav.querySelector(".dl-sb-favs");
+    var current = currentChatId();
+    var key = favList.map(function (f) { return f.id + "=" + chatName(f); }).join("|") + "@" + current;
+    if (section && section.dataset.key === key) return;
+    if (section) section.remove();
+    if (!favList.length) return;
+    section = el("div", "dl-sb-favs");
+    section.dataset.key = key;
+    section.appendChild(el("div", "dl-sb-label", "Favourites"));
+    favList.forEach(function (f) {
+      var row = el("div", "dl-sb-fav" + (f.id === current ? " dl-active" : ""));
+      var open = el("button", "dl-sb-fav-open", chatName(f));
+      open.type = "button";
+      open.title = chatName(f);
+      open.addEventListener("click", function () { openChat(f.id); });
+      var star = el("button", "dl-sb-fav-star", "\u2605");
+      star.type = "button";
+      star.title = "Unfavourite";
+      star.addEventListener("click", function () { setFavourite(f.id, false); });
+      row.appendChild(open);
+      row.appendChild(star);
+      section.appendChild(row);
+    });
+    nav.insertBefore(section, chatsLabel);
+  }
+
+  function postFavourites(path, body) {
+    return fetch(BASE + "datalake/favourites" + path, {
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body || {})
     }).then(function (r) { return r.ok ? r.json() : null; });
   }
 
-  function applySaveButton() {
+  function applyFavouriteButton() {
     var header = document.getElementById("header");
     var id = currentChatId();
-    var existing = header && header.querySelector(".dl-save");
-    if (!header || !saved || !retentionDays || !id) {
+    var existing = header && header.querySelector(".dl-fav");
+    if (!header || !favourites || !retentionDays || !id) {
       if (existing) existing.remove();
       return;
     }
-    var isSaved = saved.has(id);
-    if (existing && existing.dataset.chat === id && existing.dataset.saved === String(isSaved)) return;
+    var isFav = favourites.has(id);
+    if (existing && existing.dataset.chat === id && existing.dataset.fav === String(isFav)) return;
     if (existing) existing.remove();
-    var b = el("button", "dl-save" + (isSaved ? " dl-saved" : ""),
-               isSaved ? "\u2605 Saved" : "\u2606 Save chat");
+    var b = el("button", "dl-fav" + (isFav ? " dl-fav-on" : ""),
+               isFav ? "\u2605 Favourite" : "\u2606 Favourite");
     b.type = "button";
     b.dataset.chat = id;
-    b.dataset.saved = String(isSaved);
-    b.title = isSaved
-      ? "Kept until you unsave it."
-      : "Unsaved chats are deleted after " + retentionDays + " days without activity.";
+    b.dataset.fav = String(isFav);
+    b.title = isFav
+      ? "A favourite: kept until you remove it from favourites."
+      : "Add to favourites to keep it. Other chats are deleted after " +
+        retentionDays + " days without activity.";
     b.addEventListener("click", function () {
       b.disabled = true;
-      setSaved(id, !isSaved).catch(function () { b.disabled = false; });
+      setFavourite(id, !isFav).catch(function () { b.disabled = false; });
     });
     header.appendChild(b);
   }
 
-  function setSaved(id, save) {
-    return postSaved("/" + encodeURIComponent(id), { saved: save }).then(takeSavedState);
+  function setFavourite(id, on) {
+    return postFavourites("/" + encodeURIComponent(id), { favourite: on }).then(takeFavourites);
   }
 
   // The same toggle in each chat's ⋯ menu in the sidebar. The menu opens in
@@ -297,24 +355,24 @@
 
   function applyChatMenu() {
     var rename = document.getElementById("rename-thread");
-    if (!rename || !saved || !retentionDays || !menuChatId) return;
+    if (!rename || !favourites || !retentionDays || !menuChatId) return;
     var menu = rename.parentNode;
     var id = menuChatId;
-    var isSaved = saved.has(id);
-    var existing = menu.querySelector(":scope > .dl-menu-save");
-    if (existing && existing.dataset.chat === id && existing.dataset.saved === String(isSaved)) return;
+    var isFav = favourites.has(id);
+    var existing = menu.querySelector(":scope > .dl-menu-fav");
+    if (existing && existing.dataset.chat === id && existing.dataset.fav === String(isFav)) return;
     if (existing) existing.remove();
-    var item = el("div", rename.className + " dl-menu-save");
+    var item = el("div", rename.className + " dl-menu-fav");
     item.setAttribute("role", "menuitem");
     item.tabIndex = -1;
     item.dataset.chat = id;
-    item.dataset.saved = String(isSaved);
+    item.dataset.fav = String(isFav);
     item.title = rename.title;
-    item.appendChild(el("span", null, isSaved ? "Unsave" : "Save"));
-    item.appendChild(el("span", "dl-menu-star", isSaved ? "★" : "☆"));
+    item.appendChild(el("span", null, isFav ? "Unfavourite" : "Favourite"));
+    item.appendChild(el("span", "dl-menu-star", isFav ? "★" : "☆"));
     item.addEventListener("click", function (e) {
       e.stopPropagation();
-      setSaved(id, !isSaved).catch(function () { /* unchanged */ });
+      setFavourite(id, !isFav).catch(function () { /* unchanged */ });
       closeMenu(menu);
     });
     menu.insertBefore(item, menu.firstChild);
@@ -336,9 +394,10 @@
   function apply() {
     queued = false;
     applyHeader();
-    applySaveButton();
+    applyFavouriteButton();
     applyChatMenu();
     applySidebar();
+    applyFavouritesSection();
     applyLanding();
   }
   function schedule() {
@@ -360,7 +419,7 @@
         if (user) {
           schedule();
           // 404 when chat history is off: no Save button then.
-          postSaved("").then(takeSavedState).catch(function () { /* no saving */ });
+          postFavourites("").then(takeFavourites).catch(function () { /* no favourites */ });
         } else if (attempt < 5) setTimeout(function () { loadUser(attempt + 1); }, 1500);
       })
       .catch(function () { /* no footer */ });

@@ -187,12 +187,12 @@ def test_chainlit_still_has_the_private_hooks_resume_relies_on():
     assert src.index("on_chat_resume(thread)") < src.index("emitter.resume_thread(thread)")
 
 
-# ── saved chats and the retention sweep ─────────────────────────────────────
+# ── favourite chats and the retention sweep ─────────────────────────────────
 
 def _retention_db(tmp_path):
     """Four chats, 'now' being 2026-09-30:
-    old      - last message 90 days ago, unsaved      -> swept
-    kept     - last message 90 days ago, saved        -> kept
+    old      - last message 90 days ago, not a favourite -> swept
+    kept     - last message 90 days ago, favourite    -> kept
     active   - created 90 days ago, message yesterday -> kept (still in use)
     new      - created yesterday                      -> kept"""
     import sqlalchemy as sa
@@ -210,11 +210,11 @@ def _retention_db(tmp_path):
                 await conn.execute(s.insert().values(id=f"s-{tid}", name="user", type="user_message",
                                                      threadId=tid, streaming=False, createdAt=when))
             await conn.execute(f.insert().values(id="f-old", forId="s-old", threadId="old", value=1))
-        await chat_store.set_saved(url, "kept", "a@tunedglobal.com", True)
+        await chat_store.set_favourite(url, "kept", "a@tunedglobal.com", True)
     return url, build, (t, s, f)
 
 
-def test_sweep_deletes_only_idle_unsaved_chats(tmp_path):
+def test_sweep_deletes_only_idle_non_favourite_chats(tmp_path):
     from datetime import datetime, timezone
     import sqlalchemy as sa
     url, build, (t, s, f) = _retention_db(tmp_path)
@@ -250,18 +250,18 @@ def test_retention_off_keeps_everything(tmp_path):
     assert asyncio.run(go()) == 0
 
 
-def test_saving_and_unsaving_a_chat(tmp_path):
+def test_adding_and_removing_a_favourite(tmp_path):
     url, build, _ = _retention_db(tmp_path)
 
     async def go():
         await build()
         a, b = "a@tunedglobal.com", "b@tunedglobal.com"
-        await chat_store.set_saved(url, "old", a, True)
-        await chat_store.set_saved(url, "old", a, True)          # twice is fine
-        both = await chat_store.saved_thread_ids(url, a)
-        others = await chat_store.saved_thread_ids(url, b)
-        await chat_store.set_saved(url, "kept", a, False)
-        after = await chat_store.saved_thread_ids(url, a)
+        await chat_store.set_favourite(url, "old", a, True)
+        await chat_store.set_favourite(url, "old", a, True)          # twice is fine
+        both = await chat_store.favourite_thread_ids(url, a)
+        others = await chat_store.favourite_thread_ids(url, b)
+        await chat_store.set_favourite(url, "kept", a, False)
+        after = await chat_store.favourite_thread_ids(url, a)
         await chat_store._engine(url).dispose()
         return both, others, after
 
@@ -278,3 +278,21 @@ def test_retention_days_setting(monkeypatch, value, days):
     else:
         monkeypatch.setenv("CHAT_RETENTION_DAYS", value)
     assert chat_store.retention_days() == days
+
+
+def test_favourite_chats_come_with_names_newest_first(tmp_path):
+    """The sidebar's Favourites section lists these as they come back."""
+    url, build, _ = _retention_db(tmp_path)
+
+    async def go():
+        await build()                                    # "kept" is a favourite
+        await asyncio.sleep(0.01)                        # a later favouritedAt
+        await chat_store.set_favourite(url, "new", "a@tunedglobal.com", True)
+        chats = await chat_store.favourite_chats(url, "a@tunedglobal.com")
+        others = await chat_store.favourite_chats(url, "b@tunedglobal.com")
+        await chat_store._engine(url).dispose()
+        return chats, others
+
+    chats, others = asyncio.run(go())
+    assert chats == [{"id": "new", "name": "new"}, {"id": "kept", "name": "kept"}]
+    assert others == []

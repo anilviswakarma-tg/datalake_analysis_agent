@@ -118,13 +118,13 @@ RETENTION_SWEEP_SECONDS = 24 * 60 * 60
 
 
 async def _retention_sweep() -> None:
-    """Delete unsaved chats idle past chat_store.retention_days(), now and
+    """Delete non-favourite chats idle past chat_store.retention_days(), now and
     then daily. A failed sweep is logged and retried the next day."""
     while True:
         try:
             removed = await chat_store.purge_expired(CHAT_DB_URL)
             if removed:
-                log.info("chat retention: deleted %d unsaved chats", removed)
+                log.info("chat retention: deleted %d non-favourite chats", removed)
         except Exception:
             log.exception("chat retention sweep failed")
         await asyncio.sleep(RETENTION_SWEEP_SECONDS)
@@ -141,29 +141,29 @@ if CHAT_DB_URL:
     def history_data_layer():
         return build_data_layer(CHAT_DB_URL)
 
-    # Saving a chat, for public/app.js. POST only: Chainlit's catch-all page
+    # Favourite chats, for public/app.js. POST only: Chainlit's catch-all page
     # route is GET, so a GET here would never be reached.
-    async def _saved_state(user: Any) -> JSONResponse:
-        ids = await chat_store.saved_thread_ids(CHAT_DB_URL, user.identifier)
-        return JSONResponse({"saved": sorted(ids),
+    async def _favourites_state(user: Any) -> JSONResponse:
+        chats = await chat_store.favourite_chats(CHAT_DB_URL, user.identifier)
+        return JSONResponse({"favourites": chats,
                              "retention_days": chat_store.retention_days()})
 
-    async def list_saved_chats(current_user: UserParam):
+    async def list_favourite_chats(current_user: UserParam):
         if not current_user:
             raise HTTPException(status_code=401, detail="Unauthorized")
-        return await _saved_state(current_user)
+        return await _favourites_state(current_user)
 
-    async def save_chat(thread_id: str, payload: Dict[str, bool], current_user: UserParam):
+    async def set_favourite_chat(thread_id: str, payload: Dict[str, bool], current_user: UserParam):
         if not current_user:
             raise HTTPException(status_code=401, detail="Unauthorized")
         await is_thread_author(current_user.identifier, thread_id)   # 401/404 otherwise
-        await chat_store.set_saved(CHAT_DB_URL, thread_id, current_user.identifier,
-                                   bool(payload.get("saved")))
-        return await _saved_state(current_user)
+        await chat_store.set_favourite(CHAT_DB_URL, thread_id, current_user.identifier,
+                                       bool(payload.get("favourite")))
+        return await _favourites_state(current_user)
 
     _root = cl_config.run.root_path or ""
-    cl_server.app.add_api_route(f"{_root}/datalake/saved", list_saved_chats, methods=["POST"])
-    cl_server.app.add_api_route(f"{_root}/datalake/saved/{{thread_id}}", save_chat,
+    cl_server.app.add_api_route(f"{_root}/datalake/favourites", list_favourite_chats, methods=["POST"])
+    cl_server.app.add_api_route(f"{_root}/datalake/favourites/{{thread_id}}", set_favourite_chat,
                                 methods=["POST"])
 
 
@@ -171,10 +171,13 @@ if CHAT_DB_URL:
 # MODEL PICKER, SETTINGS
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Each user's last-used model, so a new chat keeps it (the Streamlit picker
-# held its value for the browser session). In memory: a restart falls back
-# to the default, which is harmless.
+# Each user's last-used model and dev-mode setting, so a new chat - which
+# picking an agent starts - keeps them (the Streamlit controls held their
+# value for the browser session). In memory: a restart falls back to the
+# defaults, which is harmless. Dry-run is deliberately not carried over: a
+# new chat always starts live, so nobody lands in dry-run by surprise.
 _LAST_MODEL: Dict[str, str] = {}
+_DEV_MODE: Dict[str, bool] = {}
 
 
 def _user_key() -> Optional[str]:
@@ -193,7 +196,8 @@ def _model_mode() -> cl.Mode:
 
 async def _send_settings() -> Dict[str, Any]:
     return await cl.ChatSettings([
-        Switch(id="dev_mode", label="Dev mode", initial=False,
+        Switch(id="dev_mode", label="Dev mode",
+               initial=_DEV_MODE.get(_user_key() or "", False),
                description="Show the agent's tool calls, SQL and query ids, "
                            "and the developer commands."),
         Switch(id="execute_live", label="Execute against Athena", initial=True,
@@ -228,6 +232,8 @@ async def _start_session(history: List[Dict[str, str]]) -> None:
     cl.user_session.set("history", history)
     cl.user_session.set("settings", await _send_settings())
     await cl.context.emitter.set_modes([_model_mode()])
+    if _dev_mode():
+        await cl.context.emitter.set_commands(_DEV_COMMANDS)
 
 
 @cl.on_chat_start
@@ -266,7 +272,7 @@ async def on_chat_resume(thread: Dict[str, Any]):
         if df is None:
             continue
         elements, _captions = await _result_parts(df, result.get("query_id"),
-                                                  result.get("chart"), dev=False)
+                                                  result.get("chart"), dev=_dev_mode())
         await _attach_to_resumed_thread(thread, step_id, elements)
 
 
@@ -296,6 +302,8 @@ async def _attach_to_resumed_thread(thread: Dict[str, Any], step_id: str,
 @cl.on_settings_update
 async def on_settings_update(settings: Dict[str, Any]):
     cl.user_session.set("settings", settings)
+    if key := _user_key():
+        _DEV_MODE[key] = _dev_mode()            # carried into the next chat
     await cl.context.emitter.set_commands(_DEV_COMMANDS if _dev_mode() else [])
     if _dev_mode() and not _execute_live():
         await cl.context.emitter.send_toast(

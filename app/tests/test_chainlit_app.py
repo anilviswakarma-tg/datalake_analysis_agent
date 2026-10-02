@@ -198,17 +198,42 @@ def test_chainlit_frontend_still_has_what_app_js_hooks_onto(hook):
     assert hook in _frontend_bundle(), hook
 
 
-def test_save_chat_routes_are_post_and_signed_in(cl_app):
+def test_dev_mode_carries_into_new_chats_but_dry_run_does_not(cl_app, monkeypatch):
+    """Picking an agent starts a new chat; dev mode used to reset each time."""
+    import asyncio
+    sent = {}
+
+    class FakeSettings:
+        def __init__(self, inputs):
+            sent["initial"] = {i.id: i.initial for i in inputs}
+
+        async def send(self):
+            return dict(sent["initial"])
+
+    monkeypatch.setattr(cl_app, "_user_key", lambda: "a@tunedglobal.com")
+    monkeypatch.setattr(cl_app.cl, "ChatSettings", FakeSettings)
+    monkeypatch.setattr(cl_app, "_DEV_MODE", {})
+    asyncio.run(cl_app._send_settings())
+    assert sent["initial"] == {"dev_mode": False, "execute_live": True}
+    cl_app._DEV_MODE["a@tunedglobal.com"] = True
+    asyncio.run(cl_app._send_settings())
+    assert sent["initial"] == {"dev_mode": True, "execute_live": True}
+    src = inspect.getsource(cl_app.on_settings_update)
+    assert "_DEV_MODE[key] = _dev_mode()" in src
+    assert "_DEV_MODE[key] = _execute_live" not in src      # dry-run stays per chat
+
+
+def test_favourite_routes_are_post_and_signed_in(cl_app):
     """GET would lose to Chainlit's catch-all page route, and both must
-    require a signed-in user; saving also checks the chat's owner."""
+    require a signed-in user; setting a favourite also checks the chat's owner."""
     import chainlit.server as server
     routes = {(r.path, tuple(sorted(r.methods))) for r in server.app.routes
-              if getattr(r, "path", "").endswith(("/datalake/saved", "/datalake/saved/{thread_id}"))}
+              if getattr(r, "path", "").endswith(("/datalake/favourites", "/datalake/favourites/{thread_id}"))}
     assert {m for _, m in routes} == {("POST",)}
     assert len({p for p, _ in routes}) == 2
-    src = inspect.getsource(cl_app.save_chat)
+    src = inspect.getsource(cl_app.set_favourite_chat)
     assert "is_thread_author(current_user.identifier, thread_id)" in src
-    assert src.index("is_thread_author") < src.index("set_saved")
+    assert src.index("is_thread_author") < src.index("set_favourite(")
 
 
 def test_fonts_are_served_as_fonts(cl_app):

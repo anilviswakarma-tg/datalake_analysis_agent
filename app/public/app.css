@@ -56,17 +56,18 @@ a[href*="chainlit.io"],
 .dl-bypass strong { color: #ffe680; }
 .dl-bypass code { font-size: 12px; color: #ffe680; }
 
-/* Save chat, at the right of the title bar (app.js). */
-.dl-save {
+/* Favourite toggle, at the right of the title bar (app.js). */
+.dl-fav {
   position: absolute; right: 16px; top: 50%; transform: translateY(-50%);
   border: 1px solid #404040; border-radius: 8px; padding: 5px 12px; cursor: pointer;
   background: transparent; color: #9A9A9A; font-size: 13px; font-weight: 500;
 }
-.dl-save:hover { border-color: #E85420; color: #E85420; }
-.dl-save.dl-saved { border-color: #E85420; color: #E85420; }
-.dl-save:disabled { opacity: 0.6; cursor: default; }
+.dl-fav:hover { border-color: #E85420; color: #E85420; }
+.dl-fav.dl-fav-on { border-color: #E85420; color: #E85420; }
+.dl-fav:disabled { opacity: 0.6; cursor: default; }
 /* ...and in each chat's ⋯ menu; the item copies Chainlit's own classes. */
 .dl-menu-star { margin-left: auto; color: #E85420; font-size: 15px; line-height: 1; }
+.dl-menu-fav { white-space: nowrap; gap: 12px; }
 
 /* ── welcome screen: hero and tiles at the top, message box at the bottom ── */
 #welcome-screen {
@@ -132,6 +133,24 @@ a[href*="chainlit.io"],
   box-shadow: inset 2px 0 0 #E85420; border-radius: 8px;
 }
 .dl-sb-item .dl-icon { color: rgb(205,205,205); font-size: 19px; }
+
+/* Favourites section, above Chats (app.js) */
+.dl-sb-fav {
+  display: flex; align-items: center; border-radius: 8px; margin: 1px 0;
+  box-shadow: inset 2px 0 0 transparent;
+}
+.dl-sb-fav:hover { background: rgba(255,255,255,0.05); }
+.dl-sb-fav.dl-active { background: rgba(232,84,32,0.15); box-shadow: inset 2px 0 0 #E85420; }
+.dl-sb-fav-open {
+  flex: 1; min-width: 0; text-align: left; padding: 8px 6px 8px 12px; cursor: pointer;
+  background: transparent; border: none; color: rgb(230,230,230); font-size: 14px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dl-sb-fav-star {
+  flex-shrink: 0; padding: 4px 10px; background: transparent; border: none; cursor: pointer;
+  color: #E85420; font-size: 15px; line-height: 1;
+}
+.dl-sb-fav-star:hover { color: #9A9A9A; }
 
 .dl-sb-footer { margin: auto 16px 14px; border-top: 1px solid #333333; padding-top: 12px; }
 .dl-sb-user {

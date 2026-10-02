@@ -167,7 +167,7 @@ Answers to the checks above:
   box, so they use the picked model. Colours, logo and fonts match the
   Streamlit theme. What still differs: the model picker and the Dev mode /
   dry-run switches sit under the message box (⚙️), not in a top bar; the
-  sidebar also lists saved chats; and in dev mode the tool trace shows as
+  sidebar also lists past chats; and in dev mode the tool trace shows as
   steps above the answer instead of tabs.
 - **Tables and downloads: native.** `cl.Dataframe`, `cl.File`. Charts moved
   from Altair to Plotly (`results.plotly_figure`), since Chainlit has no Vega.
@@ -185,8 +185,9 @@ Answers to the checks above:
   design, implemented.
 
 - **Retention (2026-09-30).** Chats are deleted after 60 days without
-  activity (`CHAT_RETENTION_DAYS`) unless the user saves them with the title
-  bar's Save chat button; saved chats show a star in the chat list. The
+  activity (`CHAT_RETENTION_DAYS`) unless the user makes them favourites
+  (the title bar's Favourite button or the chat's ⋯ menu); favourites show a
+  star in the chat list. The
   sweep runs at startup and daily. The model is sent the last 25 exchanges
   of a chat (`MAX_HISTORY`).
 

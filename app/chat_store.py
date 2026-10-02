@@ -148,16 +148,16 @@ sa.Table(
 )
 
 
-# Ours, not Chainlit's: which chats a user has saved from the retention
-# sweep. A table of its own rather than a flag in threads.metadata, so the
+# Ours, not Chainlit's: which chats a user has made favourites, which the
+# retention sweep keeps. A table of its own rather than a flag in threads.metadata, so the
 # sweep can filter on it in plain SQL on any backend, and create_all adds it
 # to an existing database.
 sa.Table(
-    "saved_threads", SCHEMA,
+    "favourite_threads", SCHEMA,
     sa.Column("threadId", _id, sa.ForeignKey("threads.id", ondelete="CASCADE"),
               primary_key=True),
     sa.Column("userIdentifier", sa.Text, nullable=False, index=True),
-    sa.Column("savedAt", sa.Text, nullable=False),
+    sa.Column("favouritedAt", sa.Text, nullable=False),
 )
 
 
@@ -184,7 +184,7 @@ async def ensure_schema(url: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 # SAVED CHATS AND RETENTION
 # ═══════════════════════════════════════════════════════════════════════════
-# A chat nobody has saved is deleted once it has had no activity for
+# A chat that isn't a favourite is deleted once it has had no activity for
 # RETENTION_DAYS (CHAT_RETENTION_DAYS, default 60; 0 keeps everything).
 # Activity is the newest message, so a chat that is still being used is
 # never swept, however old it is.
@@ -211,38 +211,50 @@ def _t(name: str) -> sa.Table:
     return SCHEMA.tables[name]
 
 
-async def set_saved(url: str, thread_id: str, user_identifier: str, saved: bool) -> None:
-    table = _t("saved_threads")
+async def set_favourite(url: str, thread_id: str, user_identifier: str, favourite: bool) -> None:
+    table = _t("favourite_threads")
     async with _engine(url).begin() as conn:
         await conn.execute(table.delete().where(table.c.threadId == thread_id))
-        if saved:
+        if favourite:
             await conn.execute(table.insert().values(
                 threadId=thread_id, userIdentifier=user_identifier,
-                savedAt=_iso(datetime.now(timezone.utc))))
+                favouritedAt=_iso(datetime.now(timezone.utc))))
 
 
-async def saved_thread_ids(url: str, user_identifier: str) -> Set[str]:
-    table = _t("saved_threads")
+async def favourite_thread_ids(url: str, user_identifier: str) -> Set[str]:
+    table = _t("favourite_threads")
     async with _engine(url).connect() as conn:
         rows = await conn.execute(sa.select(table.c.threadId)
                                   .where(table.c.userIdentifier == user_identifier))
         return {r[0] for r in rows}
 
 
+async def favourite_chats(url: str, user_identifier: str) -> List[Dict[str, Any]]:
+    """The user's favourite chats with their names, newest favourite first,
+    for the sidebar's Favourites section."""
+    favs, threads = _t("favourite_threads"), _t("threads")
+    query = (sa.select(favs.c.threadId, threads.c.name)
+             .join(threads, threads.c.id == favs.c.threadId)
+             .where(favs.c.userIdentifier == user_identifier)
+             .order_by(favs.c.favouritedAt.desc()))
+    async with _engine(url).connect() as conn:
+        return [{"id": r[0], "name": r[1]} for r in await conn.execute(query)]
+
+
 async def purge_expired(url: str, days: Optional[int] = None,
                         now: Optional[datetime] = None) -> int:
-    """Delete unsaved chats idle for longer than `days`. Returns how many."""
+    """Delete non-favourite chats idle for longer than `days`. Returns how many."""
     days = retention_days() if days is None else days
     if days <= 0:
         return 0
     cutoff = _iso((now or datetime.now(timezone.utc)) - timedelta(days=days))
-    threads, steps, saved = _t("threads"), _t("steps"), _t("saved_threads")
+    threads, steps, favs = _t("threads"), _t("steps"), _t("favourite_threads")
     last = (sa.select(steps.c.threadId, sa.func.max(steps.c.createdAt).label("last"))
             .group_by(steps.c.threadId).subquery())
     expired = (sa.select(threads.c.id)
                .outerjoin(last, last.c.threadId == threads.c.id)
                .where(sa.func.coalesce(last.c.last, threads.c.createdAt) < cutoff)
-               .where(threads.c.id.not_in(sa.select(saved.c.threadId))))
+               .where(threads.c.id.not_in(sa.select(favs.c.threadId))))
     async with _engine(url).begin() as conn:
         ids = [r[0] for r in await conn.execute(expired)]
         if ids:
@@ -254,7 +266,7 @@ async def _delete_threads(conn, ids: Iterable[str]) -> None:
     # Children first, explicitly: SQLite ignores ON DELETE CASCADE unless
     # foreign keys are switched on for the connection.
     ids = list(ids)
-    for name in ("feedbacks", "elements", "steps", "saved_threads"):
+    for name in ("feedbacks", "elements", "steps", "favourite_threads"):
         table = _t(name)
         await conn.execute(table.delete().where(table.c.threadId.in_(ids)))
     await conn.execute(_t("threads").delete().where(_t("threads").c.id.in_(ids)))
