@@ -179,6 +179,15 @@ Answers to the checks above:
   callback — Chainlit doesn't send Google's `hd` hint), and the dev bypass as a
   header-auth callback behind the same container gate. The 24-hour expiry is
   `user_session_timeout`; no JavaScript timer.
+- **Postgres, locally (2026-10-05).** Development runs on Postgres 16 in
+  Docker (`docker compose --profile local-db up -d chat-db`, `CHAT_DB_URL` in
+  `.env.example`). Checked end to end: a conversation, favourite and usage
+  survive a restart and a reopened chat keeps its table, chart, downloads and
+  context. The database tests run on Postgres with `TEST_DATABASE_URL` set to the
+  separate `datalake_chat_test` database (they wipe it; see `tests/conftest.py`). **TODO: the production database** - most likely
+  RDS PostgreSQL in the prod account, reachable from the EC2 instance; then
+  set `CHAT_DB_URL` in the server's `.env`. Nothing to migrate: nothing has
+  been deployed with history yet.
 - **Data layer: done, database-agnostic (2026-09-26).** SQLite on a Docker
   volume for now, selected by `CHAT_DB_URL`; moving to Postgres is a URL
   change. The stock `SQLAlchemyDataLayer` silently dropped user messages and

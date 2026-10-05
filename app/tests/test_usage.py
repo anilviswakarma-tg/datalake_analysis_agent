@@ -128,17 +128,13 @@ from datetime import datetime, timezone
 import chat_store
 
 
-def _db(tmp_path):
-    return f"sqlite+aiosqlite:///{(tmp_path / 'u.db').as_posix()}"
-
-
 def _scan(n, status="succeeded"):
     return {"query_id": f"q{n}", "bytes_scanned": n, "status": status,
             "tool": "sql_db_query", "workgroup": "datalake-agent"}
 
 
-def test_usage_is_totalled_for_the_calendar_month(tmp_path):
-    url = _db(tmp_path)
+def test_usage_is_totalled_for_the_calendar_month(db_url):
+    url = db_url
     a = "a@tunedglobal.com"
 
     async def go():
@@ -160,8 +156,8 @@ def test_usage_is_totalled_for_the_calendar_month(tmp_path):
     assert nobody["bytes"] == 0 and nobody["queries"] == 0
 
 
-def test_users_are_capped_unless_marked_uncapped(tmp_path):
-    url = _db(tmp_path)
+def test_users_are_capped_unless_marked_uncapped(db_url):
+    url = db_url
 
     async def go():
         await chat_store.ensure_schema(url)
@@ -212,14 +208,19 @@ def test_a_storage_failure_never_fails_the_answer(cl_app, monkeypatch, caplog):
     assert "could not record Athena usage" in caplog.text
 
 
-def test_the_meter_gets_the_month_and_the_tier(cl_app, monkeypatch, tmp_path):
+def test_the_meter_gets_the_month_and_the_tier(cl_app, monkeypatch, db_url):
     from types import SimpleNamespace
-    url = _db(tmp_path)
-    asyncio.run(chat_store.ensure_schema(url))
-    asyncio.run(chat_store.record_usage(url, "a@tunedglobal.com", None, [_scan(42)]))
+    url = db_url
     monkeypatch.setattr(cl_app, "CHAT_DB_URL", url)
-    body = asyncio.run(cl_app.usage_summary(SimpleNamespace(identifier="a@tunedglobal.com"))).body
-    asyncio.run(chat_store._engine(url).dispose())
+
+    async def go():
+        await chat_store.ensure_schema(url)
+        await chat_store.record_usage(url, "a@tunedglobal.com", None, [_scan(42)])
+        response = await cl_app.usage_summary(SimpleNamespace(identifier="a@tunedglobal.com"))
+        await chat_store._engine(url).dispose()
+        return response.body
+
+    body = asyncio.run(go())
     assert b'"bytes":42' in body and b'"queries":1' in body and b'"tier":"capped"' in body
 
 

@@ -290,3 +290,12 @@ def test_app_js_parses():
     result = subprocess.run([node, "--check", str(SCRIPT_DIR / "public" / "app.js")],
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_hiding_empty_date_groups_cannot_hide_the_whole_sidebar():
+    """Chainlit wraps the whole chat list - and our Agents/Favourites sections -
+    in an outer sidebar group. An unscoped rule hid it whenever every chat
+    was a favourite, blanking the sidebar."""
+    from config import SCRIPT_DIR
+    js = (SCRIPT_DIR / "public" / "app.js").read_text(encoding="utf-8")
+    assert "'#thread-history [data-sidebar=\"group\"]:has(" in js

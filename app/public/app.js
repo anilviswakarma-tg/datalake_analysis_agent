@@ -244,11 +244,14 @@
     // Favourites move to their own section (applyFavouritesSection), so take
     // them out of Chainlit's date-grouped list, and hide a date heading left
     // with nothing under it. The hidden items stay in the page: opening a
-    // favourite clicks its link there.
+    // favourite clicks its link there. Only the date groups inside
+    // #thread-history: Chainlit wraps the whole list (and our sections) in an
+    // outer group too, and hiding that one blanked the sidebar whenever every
+    // chat was a favourite.
     var ids = favList.map(function (f) { return '[id="thread-' + f.id.replace(/["\\]/g, "") + '"]'; });
     starSheet.textContent = ids.length
       ? ids.join(",\n") + " { display: none; }\n" +
-        '[data-sidebar="group"]:has([data-sidebar="menu-item"])' +
+        '#thread-history [data-sidebar="group"]:has([data-sidebar="menu-item"])' +
         ':not(:has([data-sidebar="menu-item"]' +
         ids.map(function (s) { return ":not(" + s + ")"; }).join("") + ")) { display: none; }"
       : "";

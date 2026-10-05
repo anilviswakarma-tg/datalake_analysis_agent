@@ -7,10 +7,11 @@ streamlit>=1.40.0
 # Chainlit replaces Streamlit (ROADMAP phase 2); both ship until it's retired.
 # 2.12.0 is the floor: earlier releases carry the MCP CVE-2026-45018/45019.
 chainlit>=2.12.0
-# Chat history. The database is picked by CHAT_DB_URL; SQLite needs aiosqlite.
-# Moving to Postgres = add asyncpg and change the URL, no code change.
+# Chat history and usage. The database is picked by CHAT_DB_URL: aiosqlite
+# for SQLite, asyncpg for Postgres (the local Docker database, and production).
 sqlalchemy[asyncio]>=2.0
 aiosqlite>=0.20
+asyncpg>=0.29
 
 # LangChain — create_agent (1.0+)
 langchain>=1.0.0

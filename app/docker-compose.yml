@@ -35,3 +35,31 @@ services:
       - ./data:/app/data
     restart: unless-stopped
 
+
+  # Local development database for chat history and usage, standing in for
+  # the production database (TODO, see ROADMAP.md). Opt-in, so a plain
+  # `docker compose up` on a server never starts it:
+  #   docker compose --profile local-db up -d chat-db
+  # then in .env:
+  #   CHAT_DB_URL=postgresql+asyncpg://datalake:datalake_local@localhost:5432/datalake_chat
+  chat-db:
+    image: postgres:16-alpine
+    container_name: datalake-chat-db
+    profiles: ["local-db"]
+    environment:
+      POSTGRES_DB: datalake_chat
+      POSTGRES_USER: datalake
+      POSTGRES_PASSWORD: ${CHAT_DB_PASSWORD:-datalake_local}   # local only
+    ports:
+      - "127.0.0.1:5432:5432"      # this machine only
+    volumes:
+      - chat-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datalake -d datalake_chat"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  chat-db-data:

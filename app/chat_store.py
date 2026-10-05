@@ -2,7 +2,7 @@
 carries so it can be rebuilt later.
 
 Backend-agnostic by construction. The database is chosen by one SQLAlchemy
-URL (CHAT_DB_URL) - SQLite on a volume today, Postgres or anything else
+URL (CHAT_DB_URL) - Postgres (local Docker in development), SQLite, or anything else
 SQLAlchemy supports later - and the schema below uses only portable types,
 so the same tables are created on any of them. Nothing here imports a UI
 framework; the Chainlit adapter lives in chainlit_data.py.
@@ -14,7 +14,7 @@ Existing SQLite history does not move by itself; copy it across if it matters.
 
 from __future__ import annotations
 
-import functools
+import asyncio
 import json
 import os
 import uuid
@@ -230,9 +230,17 @@ def _iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
 
 
-@functools.lru_cache(maxsize=None)
+_ENGINES: Dict[tuple, Any] = {}
+
+
 def _engine(url: str):
-    return create_async_engine(url, connect_args=connect_args(url))
+    """One engine per database and event loop. asyncpg's pooled connections
+    belong to the loop that opened them; the app runs one loop, but each
+    asyncio.run() in the tests is a new one."""
+    key = (url, id(asyncio.get_running_loop()))
+    if key not in _ENGINES:
+        _ENGINES[key] = create_async_engine(url, connect_args=connect_args(url))
+    return _ENGINES[key]
 
 
 def _t(name: str) -> sa.Table:

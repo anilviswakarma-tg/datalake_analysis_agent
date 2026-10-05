@@ -98,10 +98,9 @@ def _steps(thread_id):
     ]
 
 
-def _round_trip(tmp_path, make_layer):
+def _round_trip(url, make_layer):
     async def go():
         init_http_context()     # the data layer's write decorator needs a context
-        url = f"sqlite+aiosqlite:///{(tmp_path / 'h.db').as_posix()}"
         await chat_store.ensure_schema(url)
         await chat_store.ensure_schema(url)          # idempotent
         layer = make_layer(url)
@@ -118,8 +117,8 @@ def _round_trip(tmp_path, make_layer):
     return asyncio.run(go())
 
 
-def test_portable_layer_saves_and_reads_back_a_whole_conversation(tmp_path):
-    thread = _round_trip(tmp_path, build_data_layer)
+def test_portable_layer_saves_and_reads_back_a_whole_conversation(db_url):
+    thread = _round_trip(db_url, build_data_layer)
     assert [s["type"] for s in thread["steps"]] == ["user_message", "tool", "assistant_message"]
     assert json.loads(thread["metadata"])["chat_profile"] == "General"
 
@@ -132,10 +131,12 @@ def test_portable_layer_saves_and_reads_back_a_whole_conversation(tmp_path):
     assert df.to_dict("list") == {"letter": ["M", "S", "A"], "count": [63, 55, 43]}
 
 
-def test_stock_layer_still_loses_data_on_sqlite(tmp_path):
+def test_stock_layer_still_loses_data_on_sqlite(db_url):
     """Why chainlit_data exists. If this starts failing, Chainlit has fixed
     the bugs upstream and the workarounds there can be removed."""
-    thread = _round_trip(tmp_path, lambda url: SQLAlchemyDataLayer(conninfo=url))
+    if not chat_store.is_sqlite(db_url):
+        pytest.skip("documents a SQLite failure")
+    thread = _round_trip(db_url, lambda url: SQLAlchemyDataLayer(conninfo=url))
     types = [s["type"] for s in thread["steps"]]
     assert "user_message" not in types, "stock layer now saves modes - drop the workaround"
 
@@ -189,14 +190,13 @@ def test_chainlit_still_has_the_private_hooks_resume_relies_on():
 
 # ── favourite chats and the retention sweep ─────────────────────────────────
 
-def _retention_db(tmp_path):
+def _retention_db(url):
     """Four chats, 'now' being 2026-09-30:
     old      - last message 90 days ago, not a favourite -> swept
     kept     - last message 90 days ago, favourite    -> kept
     active   - created 90 days ago, message yesterday -> kept (still in use)
     new      - created yesterday                      -> kept"""
     import sqlalchemy as sa
-    url = f"sqlite+aiosqlite:///{(tmp_path / 'r.db').as_posix()}"
     old, recent = "2026-07-02T00:00:00.000000Z", "2026-09-29T00:00:00.000000Z"
     t, s, f = (chat_store.SCHEMA.tables[n] for n in ("threads", "steps", "feedbacks"))
 
@@ -214,10 +214,10 @@ def _retention_db(tmp_path):
     return url, build, (t, s, f)
 
 
-def test_sweep_deletes_only_idle_non_favourite_chats(tmp_path):
+def test_sweep_deletes_only_idle_non_favourite_chats(db_url):
     from datetime import datetime, timezone
     import sqlalchemy as sa
-    url, build, (t, s, f) = _retention_db(tmp_path)
+    url, build, (t, s, f) = _retention_db(db_url)
     now = datetime(2026, 9, 30, tzinfo=timezone.utc)
 
     async def go():
@@ -237,9 +237,9 @@ def test_sweep_deletes_only_idle_non_favourite_chats(tmp_path):
     assert feedback == []                       # children go too, not orphaned
 
 
-def test_retention_off_keeps_everything(tmp_path):
+def test_retention_off_keeps_everything(db_url):
     from datetime import datetime, timezone
-    url, build, _ = _retention_db(tmp_path)
+    url, build, _ = _retention_db(db_url)
 
     async def go():
         await build()
@@ -250,8 +250,8 @@ def test_retention_off_keeps_everything(tmp_path):
     assert asyncio.run(go()) == 0
 
 
-def test_adding_and_removing_a_favourite(tmp_path):
-    url, build, _ = _retention_db(tmp_path)
+def test_adding_and_removing_a_favourite(db_url):
+    url, build, _ = _retention_db(db_url)
 
     async def go():
         await build()
@@ -280,9 +280,9 @@ def test_retention_days_setting(monkeypatch, value, days):
     assert chat_store.retention_days() == days
 
 
-def test_favourite_chats_come_with_names_newest_first(tmp_path):
+def test_favourite_chats_come_with_names_newest_first(db_url):
     """The sidebar's Favourites section lists these as they come back."""
-    url, build, _ = _retention_db(tmp_path)
+    url, build, _ = _retention_db(db_url)
 
     async def go():
         await build()                                    # "kept" is a favourite
