@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from aws import AthenaQueryError, _run_athena_query
 from results import _auto_chart_spec
 
 
@@ -36,6 +37,7 @@ class RunContext:
     question: str = ""
     model_choice: str = DEFAULT_MODEL_CHOICE
     execute_live: bool = True
+    user: str = ""                 # who asked; usage is recorded against it
     # Results, written by tools during the run
     dataframe: Optional[pd.DataFrame] = None
     query_id: Optional[str] = None
@@ -46,17 +48,24 @@ class RunContext:
     # Set by get_data_dictionary; sql_db_query refuses to run until it is
     # (the prompt makes the lookup mandatory, and weaker models skip it)
     dictionary_loaded: bool = False
+    # Every Athena query the run made and what it scanned (record_scan), for
+    # usage tracking. Failed and cancelled queries too: they are billed.
+    scans: List[Dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def bytes_scanned(self) -> int:
+        return sum(s["bytes_scanned"] for s in self.scans)
 
 
 _CURRENT_RUN: ContextVar[RunContext] = ContextVar("current_run")
 
 
 def start_run(question: str = "", model_choice: str = DEFAULT_MODEL_CHOICE,
-              execute_live: bool = True) -> RunContext:
+              execute_live: bool = True, user: str = "") -> RunContext:
     """Begin a fresh run in the current context and return it. Call once per
     question, before the agent is built or streamed."""
     ctx = RunContext(question=question, model_choice=model_choice,
-                     execute_live=execute_live)
+                     execute_live=execute_live, user=user)
     _CURRENT_RUN.set(ctx)
     return ctx
 
@@ -172,6 +181,32 @@ def record_query(sql: str) -> None:
     """Book a query against this run's budget, before it executes so that a
     failing query still counts and cannot be retried indefinitely."""
     current_run().executed_sql.append(_normalise_sql(sql))
+
+
+def record_scan(query_id: Optional[str], bytes_scanned: int, status: str,
+                tool: str, workgroup: str = "") -> None:
+    """Note an Athena query's scan on the active run. A no-op outside a run
+    (e.g. the entity cache warming up), which has no one to bill it to."""
+    run = active_run()
+    if run is None or not query_id:
+        return
+    run.scans.append({"query_id": query_id, "bytes_scanned": int(bytes_scanned or 0),
+                      "status": status, "tool": tool, "workgroup": workgroup})
+
+
+def tracked_query(sql: str, tool: str, database: Optional[str] = None,
+                  limit_rows: int = 1000) -> pd.DataFrame:
+    """Run an Athena query and record what it scanned on the active run,
+    whether it succeeds or not. Every Athena call the app makes goes through
+    here, so usage tracking can't miss one."""
+    try:
+        df = _run_athena_query(sql, database=database, limit_rows=limit_rows)
+    except AthenaQueryError as e:
+        record_scan(e.query_id, e.bytes_scanned, e.state.lower(), tool)
+        raise
+    record_scan(df.attrs.get("query_id"), df.attrs.get("bytes_scanned", 0),
+                "succeeded", tool, df.attrs.get("workgroup", ""))
+    return df
 
 
 def queries_run() -> int:

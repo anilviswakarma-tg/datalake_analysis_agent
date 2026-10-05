@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from aws import _run_athena_query
+from run_state import tracked_query
 from config import _master_db
 
 
@@ -45,7 +45,7 @@ def _load_musicowners() -> pd.DataFrame:
         FROM "{_master_db()}"."musicowners"
         WHERE active = 1
     '''
-    df = _run_athena_query(sql, database=_master_db(), limit_rows=50000)
+    df = tracked_query(sql, "entity lookup", database=_master_db(), limit_rows=50000)
     _cache_set("musicowners", df)
     return df
 
@@ -58,7 +58,7 @@ def _load_groups() -> pd.DataFrame:
         SELECT group_id, name, country
         FROM "{_master_db()}"."groups"
     '''
-    df = _run_athena_query(sql, database=_master_db(), limit_rows=50000)
+    df = tracked_query(sql, "entity lookup", database=_master_db(), limit_rows=50000)
     _cache_set("groups", df)
     return df
 

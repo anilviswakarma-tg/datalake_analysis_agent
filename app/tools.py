@@ -10,14 +10,14 @@ from botocore.exceptions import BotoCoreError, ClientError
 from langchain_core.tools import tool
 
 import models
-from aws import _glue, _run_athena_query, _with_credential_retry
+from aws import AthenaQueryError, _glue, _with_credential_retry
 from config import DATA_DICT_DIR, VALID_DOMAINS, _known_databases
 from entities import _fuzzy_match, _load_groups, _load_musicowners
 from knowledge import (_append_feedback, _data_dict_index, _data_dict_preamble,
                        _normalise_table_name)
-from results import CHART_TYPES
+from results import CHART_TYPES, fmt_bytes
 from run_state import (_add_notice, _record, _stash_result, check_query_allowed,
-                       current_run, record_query)
+                       current_run, record_query, tracked_query)
 
 
 
@@ -212,8 +212,8 @@ def describe_table(database: str, table: str) -> str:
 
     # Sample 3 rows via Athena
     try:
-        sample = _run_athena_query(
-            f'SELECT * FROM "{db}"."{tbl}" LIMIT 3', database=db, limit_rows=3
+        sample = tracked_query(
+            f'SELECT * FROM "{db}"."{tbl}" LIMIT 3', "describe_table", database=db, limit_rows=3
         )
         if len(sample) > 0:
             out_parts.append(
@@ -248,7 +248,7 @@ def count_rows(database: str, table: str, where_clause: str = "") -> str:
         sql += f"\nWHERE {where_clause}"
 
     try:
-        df = _run_athena_query(sql, database=db, limit_rows=1)
+        df = tracked_query(sql, "count_rows", database=db, limit_rows=1)
         count = df.iloc[0, 0] if len(df) > 0 else 0
         _record("count_rows", f"🔢 {db}.{tbl} → {count:,}")
         return f"Row count: {count:,}"
@@ -426,7 +426,7 @@ def sql_db_query(query: str) -> str:
                 "Return the SQL to the user without running it.")
     try:
         record_query(query)
-        df = _run_athena_query(query, limit_rows=100)  # preview; full data served from S3
+        df = tracked_query(query, "sql_db_query", limit_rows=100)  # preview; full data from S3
         _stash_result(df)
         preview = df.head(10).to_string(index=False, max_cols=8)[:1500]
         _record("sql_db_query", f"✅ {len(df)} rows")
@@ -435,21 +435,38 @@ def sql_db_query(query: str) -> str:
             f"(query_id={df.attrs.get('query_id')}).\n\n"
             f"Preview (first 10 rows):\n{preview}"
         )
+    except AthenaQueryError as e:
+        if not e.scan_cutoff:
+            return _athena_error(str(e))
+        _record("sql_db_query", "\U0001f6d1 stopped: scan limit")
+        return ("QUERY STOPPED - it scanned more data than the per-query limit "
+                f"allows ({fmt_bytes(e.bytes_scanned)} before it was stopped). "
+                "Don't retry it as is. Narrow it so Athena reads less: add the "
+                "partition filters the dictionary lists for this table (e.g. "
+                "owner_id and dw_stock_type on mastermusic, group_id and "
+                "dw_reported_date on playlog tables), shorten the date range, or "
+                "select fewer columns. If it can't be narrowed, tell the user the "
+                "question needs too much data to answer here.")
     except (BotoCoreError, ClientError, RuntimeError, TimeoutError) as e:
-        err = str(e)
-        hint = ""
-        if "OutputLocation" in err or "output location" in err.lower():
-            hint = "\nHINT: Set S3 Output Location in the sidebar."
-        elif "AccessDenied" in err:
-            hint = "\nHINT: Check IAM permissions."
-        elif "SSO" in err or "expired" in err.lower():
-            hint = "\nHINT: Run `aws sso login --profile <profile>` and retry."
-        elif "Column" in err and "cannot be resolved" in err:
-            hint = "\nHINT: Use describe_table to confirm the exact column name."
-        elif "Table" in err and ("not found" in err.lower() or "does not exist" in err.lower()):
-            hint = "\nHINT: Use list_tables(db) to confirm the table exists."
-        _record("sql_db_query", f"❌ {err[:120]}")
-        return f"ATHENA ERROR: {err}{hint}"
+        return _athena_error(str(e))
+
+
+def _athena_error(err: str) -> str:
+    """The agent-facing message for a failed query, with a fix where the
+    error is a recognisable one."""
+    hint = ""
+    if "OutputLocation" in err or "output location" in err.lower():
+        hint = "\nHINT: Set S3 Output Location in the sidebar."
+    elif "AccessDenied" in err:
+        hint = "\nHINT: Check IAM permissions."
+    elif "SSO" in err or "expired" in err.lower():
+        hint = "\nHINT: Run `aws sso login --profile <profile>` and retry."
+    elif "Column" in err and "cannot be resolved" in err:
+        hint = "\nHINT: Use describe_table to confirm the exact column name."
+    elif "Table" in err and ("not found" in err.lower() or "does not exist" in err.lower()):
+        hint = "\nHINT: Use list_tables(db) to confirm the table exists."
+    _record("sql_db_query", f"❌ {err[:120]}")
+    return f"ATHENA ERROR: {err}{hint}"
 
 
 # ---- UX tools ----

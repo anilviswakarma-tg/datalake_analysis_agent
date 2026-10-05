@@ -32,14 +32,14 @@ from fastapi.responses import JSONResponse
 import access
 import chat_store
 from agent import build_agent
-from aws import _fetch_s3_csv
+from aws import _fetch_s3_csv, workgroup_scan_cutoff
 from chainlit_data import build_data_layer
-from config import DATA_DICT_DIR, FEEDBACK_FILE, _openai_key_looks_real
+from config import DATA_DICT_DIR, FEEDBACK_FILE, _openai_key_looks_real, _workgroup
 from entities import _ENTITY_CACHE
 from models import (_MODEL_REGISTRY, explain_failure, message_text,
                     missing_key_reason, model_label)
-from results import (df_to_csv_bytes, df_to_excel_bytes, is_scalar_result,
-                     plotly_figure)
+from results import (df_to_csv_bytes, df_to_excel_bytes, fmt_bytes,
+                     is_scalar_result, plotly_figure)
 from run_state import DEFAULT_MODEL_CHOICE, start_run
 from tools import friendly_status
 
@@ -165,6 +165,39 @@ if CHAT_DB_URL:
     cl_server.app.add_api_route(f"{_root}/datalake/favourites", list_favourite_chats, methods=["POST"])
     cl_server.app.add_api_route(f"{_root}/datalake/favourites/{{thread_id}}", set_favourite_chat,
                                 methods=["POST"])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ATHENA USAGE
+# ═══════════════════════════════════════════════════════════════════════════
+# What each question scanned is handed to the browser, which keeps the
+# running total for its session (public/app.js, sessionStorage). Nothing is
+# stored here: a question's scans wait in memory only until the page
+# collects them, right after the answer arrives. The real cap is the agent
+# workgroup's per-query scan cutoff (ATHENA_WORKGROUP).
+
+_PENDING_SCANS: Dict[str, List[Dict[str, Any]]] = {}
+_MAX_PENDING = 200          # per user, in case a page never collects
+
+
+def _hand_over_scans(user_key: Optional[str], scans: List[Dict[str, Any]]) -> None:
+    if user_key and scans:
+        pending = _PENDING_SCANS.setdefault(user_key, [])
+        pending.extend({"bytes": s["bytes_scanned"], "status": s["status"]} for s in scans)
+        del pending[:-_MAX_PENDING]
+
+
+async def collect_usage(current_user: UserParam):
+    """The scans made since the page last asked, for its session total."""
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    return JSONResponse({"scans": _PENDING_SCANS.pop(current_user.identifier, []),
+                         "workgroup": _workgroup(),
+                         "query_limit_bytes": workgroup_scan_cutoff()})
+
+
+cl_server.app.add_api_route(f"{cl_config.run.root_path or ''}/datalake/usage", collect_usage,
+                            methods=["POST"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -537,15 +570,22 @@ async def on_message(message: cl.Message):
 
     # This user's question, model and live flag, and the slot the tools write
     # results into. Scoped to this task's context, never process-wide.
-    ctx = start_run(question=question, model_choice=model_choice, execute_live=live)
+    ctx = start_run(question=question, model_choice=model_choice, execute_live=live,
+                    user=_user_key() or "")
     try:
         final_answer, answer = await _stream_agent(_history_messages(question), dev)
     except Exception as e:
         log.exception("agent run failed")
         await cl.Message(content=_failure_text(e, dev)).send()
         return
+    finally:
+        # A failed run's queries were billed too
+        _hand_over_scans(ctx.user, ctx.scans)
 
     elements, captions = await _result_parts(ctx.dataframe, ctx.query_id, ctx.chart, dev)
+    if dev and ctx.scans:
+        captions.append(f"Athena scanned {fmt_bytes(ctx.bytes_scanned)} across "
+                        f"{len(ctx.scans)} quer{'y' if len(ctx.scans) == 1 else 'ies'}")
     notices = "\n".join(f"> ℹ️ {n}" for n in ctx.notices)
     answer.content = "\n\n".join(p for p in (
         notices, final_answer, "\n".join(f"_{c}_" for c in captions)) if p)

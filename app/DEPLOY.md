@@ -70,7 +70,18 @@ Set at minimum:
 ```
 OPENAI_API_KEY=sk-...
 AWS_PROFILE=          # leave blank — EC2 IAM role is used automatically
+ATHENA_WORKGROUP=datalake-agent
+ATHENA_OUTPUT_S3=s3://tg-temp-data/athena-results/datalake-agent/
 ```
+
+> **TODO (before the next deploy): set `ATHENA_WORKGROUP` on the server.**
+> The app defaults to `datalake-agent` (50 GB per-query scan cutoff), but an
+> existing server `.env` that still says `ATHENA_WORKGROUP=primary` overrides
+> that and runs the agent with no cutoff. Check with
+> `docker compose exec datalake-agent-chainlit printenv ATHENA_WORKGROUP`.
+> The instance role also needs Athena access to the `datalake-agent`
+> workgroup, S3 read/write on `tg-temp-data/athena-results/datalake-agent/`,
+> and `athena:GetWorkGroup` (for the usage bar's limit).
 
 ---
 

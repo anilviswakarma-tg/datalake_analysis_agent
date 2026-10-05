@@ -390,6 +390,103 @@
     }, 50);
   }
 
+  // ── Athena usage for this browser session ───────────────────────────────
+  // The server hands over each question's scans once (POST /datalake/usage)
+  // and keeps nothing; the running total lives here, in sessionStorage, so
+  // it covers this tab's session and resets when the tab is closed.
+  var USAGE_KEY = "datalake.usage";
+  var USD_PER_TB = 5;          // Athena's on-demand price; an estimate only
+
+  function readUsage() {
+    try {
+      var u = JSON.parse(sessionStorage.getItem(USAGE_KEY) || "null");
+      if (u && typeof u.bytes === "number") { u.max = u.max || 0; return u; }
+    } catch (e) { /* unreadable or blocked: start again */ }
+    return { bytes: 0, queries: 0, max: 0 };
+  }
+
+  function collectUsage() {
+    fetch(BASE + "datalake/usage", { method: "POST", credentials: "include" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (!data) return;
+        if (data.query_limit_bytes) queryLimit = data.query_limit_bytes;
+        if (!data.scans || !data.scans.length) { schedule(); return; }
+        var u = readUsage();
+        data.scans.forEach(function (s) {
+          u.bytes += s.bytes || 0;
+          u.queries += 1;
+          u.max = Math.max(u.max || 0, s.bytes || 0);
+        });
+        try { sessionStorage.setItem(USAGE_KEY, JSON.stringify(u)); } catch (e) { /* shown anyway */ }
+        shownUsage = null;
+        schedule();
+      })
+      .catch(function () { /* try again after the next answer */ });
+  }
+
+  function fmtBytes(n) {
+    var units = ["B", "KB", "MB", "GB"];
+    for (var i = 0; i < units.length; i++) {
+      if (n < 1024) return i ? n.toFixed(1) + " " + units[i] : Math.round(n) + " B";
+      n /= 1024;
+    }
+    return n.toFixed(2) + " TB";
+  }
+
+  var shownUsage = null;
+  var queryLimit = 0;          // the workgroup's per-query cutoff, from the server
+  var wasRunning = false;
+  function applyUsage() {
+    // An answer has just finished: the stop button has gone.
+    var running = !!document.getElementById("stop-button");
+    if (wasRunning && !running) collectUsage();
+    wasRunning = running;
+
+    // Beside the model picker, in whichever message box is on screen.
+    var picker = document.getElementById("mode-picker-trigger-model");
+    var row = picker && picker.closest(".mode-picker-wrapper");
+    row = row && row.parentElement;
+    if (!row) return;
+    var pill = row.querySelector(":scope > .dl-usage");
+    if (!pill) {
+      pill = el("div", "dl-usage");
+      pill.appendChild(el("span", "dl-usage-text"));
+      var track = el("span", "dl-usage-track");
+      track.appendChild(el("span", "dl-usage-fill"));
+      pill.appendChild(track);
+      row.appendChild(pill);
+      shownUsage = null;
+    }
+    var u = readUsage();
+    // The bar is the largest single query against the workgroup's
+    // per-query cutoff: the one real limit, and how close a question came
+    // to being stopped. The label is the session total.
+    var share = queryLimit ? Math.min(1, u.max / queryLimit) : 0;
+    var text = u.queries ? fmtBytes(u.bytes) + " this session" : "No queries yet";
+    var key = text + "|" + share + "|" + queryLimit;
+    if (shownUsage === key) return;
+    shownUsage = key;
+    pill.querySelector(".dl-usage-text").textContent = text;
+    var fill = pill.querySelector(".dl-usage-fill");
+    fill.style.width = (u.queries ? Math.max(share * 100, 2) : 0) + "%";
+    pill.classList.toggle("dl-usage-high", share >= 0.75);
+    pill.querySelector(".dl-usage-track").style.display = queryLimit ? "" : "none";
+    var dollars = u.bytes / Math.pow(1024, 4) * USD_PER_TB;
+    pill.title = (u.queries
+        ? "Athena read " + fmtBytes(u.bytes) + " across " + u.queries +
+          (u.queries === 1 ? " query" : " queries") + " in this tab, " +
+          (dollars < 0.0001 ? "under $0.0001"
+           : "about $" + (dollars < 0.01 ? dollars.toFixed(4) : dollars.toFixed(2))) +
+          " at $" + USD_PER_TB + "/TB."
+        : "Nothing scanned yet in this tab.") +
+      (queryLimit
+        ? "\nBar: largest single query, " + fmtBytes(u.max) + " of the " +
+          fmtBytes(queryLimit) + " per-query limit. A query that reaches it is stopped."
+        : "") +
+      "\nResets when you close the tab.";
+  }
+
   var queued = false;
   function apply() {
     queued = false;
@@ -399,6 +496,7 @@
     applySidebar();
     applyFavouritesSection();
     applyLanding();
+    applyUsage();
   }
   function schedule() {
     if (!queued) { queued = true; requestAnimationFrame(apply); }
@@ -425,6 +523,7 @@
       .catch(function () { /* no footer */ });
   }
   loadUser(0);
+  collectUsage();       // anything finished while the page was away
 
   // Icons stay hidden until their font is in, so a slow or blocked font
   // leaves an empty square rather than the icon's name in plain text.

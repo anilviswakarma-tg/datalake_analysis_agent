@@ -193,6 +193,7 @@ def _frontend_bundle() -> str:
     '"new-chat-button"', '"thread-history"', '"readme-button"', '"theme-toggle"',
     '"user-nav-button"', "mode-picker-trigger-", '"data-sidebar":"sidebar"',
     "message-content", "inline-plotly-container", '"thread-options"', '"rename-thread"',
+    "mode-picker-wrapper",
 ])
 def test_chainlit_frontend_still_has_what_app_js_hooks_onto(hook):
     assert hook in _frontend_bundle(), hook
@@ -275,3 +276,17 @@ def test_true_false_columns_are_not_charted():
     assert tools.visualize_results.func("bar", "code", "us").startswith("Not charted")
     assert tools.visualize_results.func("bar", "code", "t").startswith("Not charted")
     assert ctx.chart is None
+
+
+def test_app_js_parses():
+    """One syntax error stops the whole page script: no landing page, no
+    sidebar, no favourites. Checked with Node where it is installed."""
+    import shutil
+    import subprocess
+    from config import SCRIPT_DIR
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    result = subprocess.run([node, "--check", str(SCRIPT_DIR / "public" / "app.js")],
+                            capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

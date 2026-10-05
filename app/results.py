@@ -64,6 +64,15 @@ CHART_TYPES = ("bar", "line", "pie", "scatter", "area")
 CHART_COLORS = ["#E85420", "#F0A07F", "#8C8C8C", "#C8C8C8", "#5A5A5A", "#B8401A"]
 
 
+def fmt_bytes(n: float) -> str:
+    """Bytes for people: '840 B', '12.3 MB', '1.25 TB'."""
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024:
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.2f} TB"
+
+
 def is_scalar_result(df: pd.DataFrame) -> bool:
     """A COUNT/SUM-style answer: one row of at most two columns, which the
     answer text already states, so the UI shows no table or downloads.

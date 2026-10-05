@@ -28,8 +28,10 @@ DEFAULTS = {
     "ATHENA_BRONZE_DB":  "tg-deltalake-bronze",
     "ATHENA_SILVER_DB":  "tg-deltalake-silver",
     "ATHENA_MASTER_DB":  "tg-master",
-    "ATHENA_OUTPUT_S3":  "s3://athena-results-223829094007-us-west-2/",
-    "ATHENA_WORKGROUP":  "primary",
+    # The agent's own workgroup: 50 GB per-query scan cutoff, enforced, with
+    # its own results location (which it overrides this with anyway).
+    "ATHENA_OUTPUT_S3":  "s3://tg-temp-data/athena-results/datalake-agent/",
+    "ATHENA_WORKGROUP":  "datalake-agent",
     "OPENAI_MODEL":      "gpt-4o",
     # Fixed seed for OpenAI's best-effort reproducible-output feature. Doesn't
     # guarantee byte-identical completions on its own, but combined with
@@ -75,7 +77,7 @@ def _output_s3() -> str:
 
 
 def _workgroup() -> str:
-    return os.getenv("ATHENA_WORKGROUP", "primary")
+    return os.getenv("ATHENA_WORKGROUP", "datalake-agent")
 
 
 def _bronze_db() -> str:

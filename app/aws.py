@@ -6,7 +6,7 @@ from __future__ import annotations
 import functools
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import boto3
 import pandas as pd
@@ -69,6 +69,25 @@ def _with_credential_retry(fn, *args, retries: int = 3, delay: float = 1.5, **kw
     raise last_exc
 
 
+QUERY_TIMEOUT_SECONDS = 900
+
+
+@functools.lru_cache(maxsize=4)
+def _cutoff_for(workgroup: str) -> Optional[int]:
+    try:
+        wg = _athena().get_work_group(WorkGroup=workgroup)["WorkGroup"]
+        cutoff = wg.get("Configuration", {}).get("BytesScannedCutoffPerQuery")
+        return int(cutoff) if cutoff else None
+    except Exception:
+        return None
+
+
+def workgroup_scan_cutoff() -> Optional[int]:
+    """The workgroup's per-query scan cutoff in bytes, or None if it has
+    none or it can't be read (needs athena:GetWorkGroup). Read once."""
+    return _cutoff_for(_workgroup())
+
+
 def _fetch_s3_csv(query_id: str) -> bytes:
     """Read the complete Athena result CSV straight from S3.
 
@@ -77,21 +96,56 @@ def _fetch_s3_csv(query_id: str) -> bytes:
     much faster than paging through get_query_results for large result sets.
     Returns empty bytes on any error (caller falls back to in-memory df).
     """
-    s3_uri = _output_s3().rstrip("/")
-    if not s3_uri or not query_id or query_id == "n/a":
+    if not query_id or query_id == "n/a":
         return b""
-    path = s3_uri[5:] if s3_uri.startswith("s3://") else s3_uri
-    bucket, _, prefix = path.partition("/")
-    key = f"{prefix.rstrip('/')}/{query_id}.csv" if prefix else f"{query_id}.csv"
     try:
+        bucket, key = _result_location(query_id)
         return _session().client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
     except Exception:
         return b""
 
 
+def _result_location(query_id: str) -> Tuple[str, str]:
+    """(bucket, key) of a query's result CSV, as Athena reports it. Not
+    rebuilt from ATHENA_OUTPUT_S3: a workgroup that enforces its own output
+    location writes elsewhere, and a guessed path would silently cut every
+    download down to the in-app preview."""
+    try:
+        execution = _athena().get_query_execution(QueryExecutionId=query_id)["QueryExecution"]
+        uri = execution["ResultConfiguration"]["OutputLocation"]
+    except Exception:
+        uri = f"{_output_s3().rstrip('/')}/{query_id}.csv"     # best guess
+    path = uri[5:] if uri.startswith("s3://") else uri
+    bucket, _, key = path.partition("/")
+    return bucket, key
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 2. ATHENA QUERY EXECUTOR
 # ═══════════════════════════════════════════════════════════════════════════
+
+class AthenaQueryError(RuntimeError):
+    """A query Athena failed or cancelled. Carries what it still cost: a
+    query cancelled by the workgroup's per-query scan cutoff has scanned up
+    to the cutoff, and that is billed."""
+
+    def __init__(self, reason: str, query_id: str, bytes_scanned: int, state: str):
+        super().__init__(reason)
+        self.query_id = query_id
+        self.bytes_scanned = bytes_scanned
+        self.state = state
+
+    @property
+    def scan_cutoff(self) -> bool:
+        """Stopped by the workgroup's BytesScannedCutoffPerQuery. Matched on
+        Athena's wording ("Bytes scanned limit was exceeded"); unverified
+        against a live cutoff until the agent's workgroup exists."""
+        return "scanned limit" in str(self).lower()
+
+
+def _bytes_scanned(execution: Dict[str, Any]) -> int:
+    return int((execution.get("Statistics") or {}).get("DataScannedInBytes") or 0)
+
 
 def _run_athena_query(
     sql: str,
@@ -115,17 +169,25 @@ def _run_athena_query(
     qid = start["QueryExecutionId"]
 
     athena = _athena()
-    deadline = time.time() + 900
+    deadline = time.time() + QUERY_TIMEOUT_SECONDS
     while True:
         if time.time() > deadline:
-            raise TimeoutError(f"Athena query {qid} timed out after 300s")
-        status = athena.get_query_execution(QueryExecutionId=qid)
-        stt = status["QueryExecution"]["Status"]
+            # Stop it, or Athena keeps scanning (and billing) after we've
+            # given up on the result.
+            try:
+                athena.stop_query_execution(QueryExecutionId=qid)
+            except Exception:
+                pass
+            raise TimeoutError(f"Athena query {qid} timed out after "
+                               f"{QUERY_TIMEOUT_SECONDS}s and was stopped")
+        execution = athena.get_query_execution(QueryExecutionId=qid)["QueryExecution"]
+        stt = execution["Status"]
         state = stt["State"]
         if state == "SUCCEEDED":
             break
         if state in ("FAILED", "CANCELLED"):
-            raise RuntimeError(stt.get("StateChangeReason", "unknown Athena error"))
+            raise AthenaQueryError(stt.get("StateChangeReason", "unknown Athena error"),
+                                   qid, _bytes_scanned(execution), state)
         time.sleep(1.5)
 
     paginator = athena.get_paginator("get_query_results")
@@ -149,6 +211,8 @@ def _run_athena_query(
 
     df = pd.DataFrame(rows, columns=columns)
     df.attrs["query_id"] = qid
+    df.attrs["bytes_scanned"] = _bytes_scanned(execution)
+    df.attrs["workgroup"] = start_kwargs["WorkGroup"]
     for col in df.columns:
         try:
             df[col] = pd.to_numeric(df[col])

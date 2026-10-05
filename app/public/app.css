@@ -172,3 +172,22 @@ a[href*="chainlit.io"],
 .message-content > * > :has(.inline-plotly-container) { order: -2; }
 .message-content > * > :has(table) { order: -1; }
 .inline-plotly-container { max-width: none !important; width: 100%; }
+
+/* Athena usage, beside the model picker (app.js): session total, and a bar
+   for the largest query against the workgroup's per-query cutoff. */
+.dl-usage {
+  display: inline-flex; align-items: center; gap: 8px; margin-left: 6px;
+  padding: 2px 8px; border-radius: 6px; color: #9A9A9A; font-size: 12px;
+  font-weight: 500; white-space: nowrap; cursor: default;
+}
+.dl-usage:hover { background: hsl(var(--muted, 0 0% 15%)); }
+.dl-usage-track {
+  position: relative; width: 56px; height: 4px; border-radius: 2px;
+  background: #3a3a3a; overflow: hidden;
+}
+.dl-usage-fill {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 0;
+  background: #8C8C8C; border-radius: 2px; transition: width 0.3s ease;
+}
+.dl-usage-high .dl-usage-fill { background: #E85420; }
+.dl-usage-high { color: #E85420; }

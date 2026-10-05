@@ -46,7 +46,10 @@ results get a lifecycle policy (see below). Instead:
 This decouples the two retentions completely: **history is tiny and kept
 indefinitely; results expire on a schedule.**
 
-Results currently go to `s3://athena-results-223829094007-us-west-2/`, set by
+*(Superseded 2026-10-05: the agent now runs in its own `datalake-agent`
+workgroup, which enforces `s3://tg-temp-data/athena-results/datalake-agent/`
+and a 50 GB per-query cutoff. The rest of this paragraph is the earlier
+setup.)* Results went to `s3://athena-results-223829094007-us-west-2/`, set by
 `ATHENA_OUTPUT_S3` and passed as `ResultConfiguration.OutputLocation` on every
 query. The `primary` workgroup cannot override it
 (`EnforceWorkGroupConfiguration: false`, no output location of its own).
@@ -196,6 +199,11 @@ default (`docker-compose.yml` now runs both, Chainlit on 8000 with the
 `data/` volume), and restrict `allow_origins` in `.chainlit/config.toml` to
 the real host.
 
+**TODO: set `ATHENA_WORKGROUP=datalake-agent` in the server's `.env`** (and
+`ATHENA_OUTPUT_S3` to its results location). The code defaults to it, but a
+server `.env` still saying `primary` would override that and run with no scan
+cutoff. Details and IAM needs in [DEPLOY.md](DEPLOY.md), Step 4.
+
 ---
 
 ## 3. Optional: a Slack entry point
@@ -216,7 +224,7 @@ Phase 2 rather than after it.
 |---|---|---|
 | `st.components.v1.html` deprecated past its removal date | session auto-logout breaks on a future Streamlit upgrade | `st.iframe` is the replacement; resolved by Phase 2 |
 | **Mandated filters don't prune `mastermusic`** | **root cause of large scans.** One agent query on 2026-09-23 scanned 15.78 GB | `mastermusic` partitions on `owner_id_salt`/`dw_stock_type`, but the playbook pushes `owner_id` and claims it gives "partition pruning benefits" (`domain_rules.md:316`) — it doesn't. See [knowledge/dictionary_gaps.md](knowledge/dictionary_gaps.md) C1 |
-| **No per-query scan cutoff** | an unbounded query can scan TBs at $5/TB | **don't set this on `primary`** — it's shared with the reporting pipelines and a cutoff there could break their jobs. Give the agent its own workgroup with `BytesScannedCutoffPerQuery`, its own output location (which also scopes the lifecycle policy to agent results), and `PublishCloudWatchMetricsEnabled` on |
+| **No per-query scan cutoff** | an unbounded query can scan TBs at $5/TB | **don't set this on `primary`** — it's shared with the reporting pipelines and a cutoff there could break their jobs. Give the agent its own workgroup with `BytesScannedCutoffPerQuery`, its own output location (which also scopes the lifecycle policy to agent results), and `PublishCloudWatchMetricsEnabled` on. **App side done (2026-10-05):** `ATHENA_WORKGROUP` selects it; a cutoff-stopped query tells the agent how to narrow it; every query's bytes scanned are recorded per question and totalled per browser session in the sidebar (nothing stored server-side) |
 | Athena results bucket has no lifecycle policy | 0.09 GB / 3,004 objects ≈ $0.002/month; largest object 8.8 MB | add 30-day expiry as hygiene. Phase 1 is designed not to depend on retention |
 | Entity cache is in-memory, 15-min TTL | lost on restart | harmless, rebuilds on demand |
 | `domain_rules.md` self-contradiction and dictionary gaps | agent may follow stale rules | tracked in [knowledge/dictionary_gaps.md](knowledge/dictionary_gaps.md) |

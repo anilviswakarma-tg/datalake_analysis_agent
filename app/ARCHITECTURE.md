@@ -15,9 +15,9 @@ rule is what keeps the graph acyclic, and `tests/test_wiring.py` enforces it.
 | `config.py` | ~90 | Environment defaults, filesystem paths, database-name accessors. Imports nothing else here. |
 | `access.py` | ~65 | Sign-in rules: allowed domain, shared password, session TTL, container-gated dev bypass. |
 | `catalogue.py` | ~85 | The four landing-page agents and their suggested questions. Writes `public/agents.json` for the Chainlit page (`python catalogue.py`). |
-| `aws.py` | ~160 | boto3 sessions and clients, credential retry, the Athena query executor, S3 result fetch. The only module that talks to AWS. |
+| `aws.py` | ~200 | boto3 sessions and clients, credential retry, the Athena query executor (bytes scanned per query; stops a timed-out query), S3 result fetch. The only module that talks to AWS. |
 | `results.py` | ~80 | Chart selection, CSV/Excel export bytes. Framework-free; rendering is in the UI layer. |
-| `run_state.py` | ~150 | The per-run context (inputs + results) handed from agent tools to the UI, and the loop guards. |
+| `run_state.py` | ~200 | The per-run context (inputs + results) handed from agent tools to the UI, the loop guards, and `tracked_query`, which every Athena call goes through so its scan is recorded. |
 | `knowledge.py` | ~170 | Reading the data dictionary, `domain_rules.md` and `feedback.md`. |
 | `entities.py` | ~90 | Resolving names ("Sony", "Etisalat") to `owner_id` / `group_id`. |
 | `models.py` | ~385 | Model registry, Bedrock Mantle SigV4 auth, content normalisers. |
