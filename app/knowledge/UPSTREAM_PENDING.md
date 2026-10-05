@@ -33,6 +33,13 @@ file when it is empty.
    join `mastermusic` only for metadata. Carries the SHUS measurement
    (4,206,570 vs 4,206,438; 0.03 GB vs 1.65 GB scanned). Written 2026-09-24
    after the agent gave a wrong SHUS catalogue size. Not upstream at all.
+9. **New section: "Comparing a store's territories across releases of the
+   same ISRC"** — a store's rights for a track are its `country` set here,
+   not `mastermusic.rights`; a query that compares the sets per ISRC and names
+   each row's missing/present countries, with the UPC from the parent album.
+   Written 2026-10-05 after the agent compared whole `rights` maps for SPLH,
+   produced an 8 GB result and never answered. Checked against four ISRCs
+   the user gave as known cases. Not upstream at all.
 
 ## `mastermusic.md`
 

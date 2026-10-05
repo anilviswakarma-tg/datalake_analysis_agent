@@ -75,6 +75,65 @@ WHERE ta.group_id = <group_id>
 
 If the question is just "which owners are assigned to this group" (not track-level detail), use `musicowners_groups` directly instead — see [musicowners.md](musicowners.md).
 
+## Comparing a store's territories across releases of the same ISRC
+
+"Rights on store" for a track means **the countries it is active in for that
+store**: its `country` values here, as a set. It is **not**
+`mastermusic.rights` (the track's own catalogue-wide rights, a nested map;
+see [mastermusic.md](mastermusic.md)). One ISRC is often several track rows,
+one per release, and a store can carry those releases in different
+countries. To find ISRCs whose releases differ, build each track's sorted
+country set, then compare the sets within each ISRC. Select only these few
+columns: carrying `mastermusic.rights` along made one attempt's result 8 GB.
+The UPC is on the parent album row (`album_id`), never on the track.
+
+```sql
+WITH store AS (
+  SELECT track_id, array_sort(array_agg(DISTINCT upper(country))) AS t
+  FROM "tg-deltalake-bronze"."track_active"
+  WHERE group_id = '<store>' AND allow_stream = 'Y'
+  GROUP BY track_id
+), occurrences AS (
+  SELECT mm.isrc, mm.title, mm.artist_name, al.upc, s.t
+  FROM store s
+  JOIN "tg-deltalake-bronze"."mastermusic" mm
+    ON s.track_id = mm.id AND mm.dw_stock_type = 'track'
+  LEFT JOIN "tg-deltalake-bronze"."mastermusic" al
+    ON al.id = mm.album_id AND al.dw_stock_type = 'album'
+), inconsistent AS (          -- ISRCs on 2+ releases whose country sets differ
+  SELECT isrc, count(*) AS n
+  FROM occurrences
+  GROUP BY isrc
+  HAVING count(*) > 1 AND count(DISTINCT array_join(t, '|')) > 1
+), territory_counts AS (
+  SELECT o.isrc, c, count(*) AS k
+  FROM occurrences o
+  JOIN inconsistent i ON o.isrc = i.isrc
+  CROSS JOIN UNNEST(o.t) AS u(c)
+  GROUP BY o.isrc, c
+), differing AS (             -- countries on some of an ISRC's releases, not all
+  SELECT tc.isrc, array_sort(array_agg(tc.c)) AS terrs
+  FROM territory_counts tc
+  JOIN inconsistent i ON tc.isrc = i.isrc
+  WHERE tc.k < i.n
+  GROUP BY tc.isrc
+)
+SELECT o.title, o.artist_name AS artist, o.upc, o.isrc,
+       array_join(o.t, '|') AS rights_on_store,
+       array_join(concat(
+         transform(array_except(d.terrs, o.t), c -> c || ' missing'),
+         transform(array_intersect(d.terrs, o.t), c -> c || ' present')), ', ') AS rights_difference
+FROM occurrences o
+JOIN differing d ON o.isrc = d.isrc
+ORDER BY o.isrc, rights_on_store
+```
+
+Measured on SPLH (2026-10-05): 11,164 ISRCs across 36,225 rows, 26 GB
+scanned. `GBAYE0702916` (2 Hearts) comes back as three `AT|CH|DE` rows and
+one `AT|DE` row (`CH missing`). For summaries (how many ISRCs, which
+countries differ), wrap this query in an aggregate rather than re-running
+variants of it.
+
 ## Related docs
 
 - [mastermusic.md](mastermusic.md) — the catalogue table `track_active` joins against

@@ -434,3 +434,15 @@ def test_documented_availability_query_ignores_territory_case():
     assert "upper(e[1])" in sql
     assert "element_at(m.rights" not in sql
     assert "from_iso8601_timestamp(e[2].ssdt) <= current_timestamp" in sql
+
+
+def test_store_territories_come_from_track_active_not_rights():
+    """For SPLH the agent compared whole mastermusic.rights maps per ISRC,
+    produced an 8 GB result and never answered (2026-10-05). The recipe is a
+    local edit (UPSTREAM_PENDING item 9); a refresh would drop it silently."""
+    from config import DATA_DICT_DIR
+    doc = (DATA_DICT_DIR / "track_active.md").read_text(encoding="utf-8")
+    section = doc.split("## Comparing a store's territories across releases of the same ISRC")[1]
+    assert "array_agg(DISTINCT upper(country))" in section
+    assert "al.id = mm.album_id" in section          # the UPC is on the album
+    assert "mm.rights" not in section.split("```sql")[1]
