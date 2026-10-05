@@ -1,5 +1,5 @@
-"""Athena usage: what each query scanned, the per-query scan cutoff, and the
-hand-over to the browser, which keeps the session total.
+"""Athena usage: what each query scanned, the per-query scan cutoff, the
+usage stored per user, and capped/uncapped tiers.
 
 A fake Athena client stands in for AWS, so these run offline."""
 import inspect
@@ -120,7 +120,71 @@ def test_every_athena_call_goes_through_the_tracker():
         assert "_run_athena_query(" not in inspect.getsource(module), module.__name__
 
 
-# ── handing the scans to the browser ────────────────────────────────────────
+# ── usage stored per user, and tiers ────────────────────────────────────────
+
+import asyncio
+from datetime import datetime, timezone
+
+import chat_store
+
+
+def _db(tmp_path):
+    return f"sqlite+aiosqlite:///{(tmp_path / 'u.db').as_posix()}"
+
+
+def _scan(n, status="succeeded"):
+    return {"query_id": f"q{n}", "bytes_scanned": n, "status": status,
+            "tool": "sql_db_query", "workgroup": "datalake-agent"}
+
+
+def test_usage_is_totalled_for_the_calendar_month(tmp_path):
+    url = _db(tmp_path)
+    a = "a@tunedglobal.com"
+
+    async def go():
+        await chat_store.ensure_schema(url)
+        sept = datetime(2026, 9, 30, 23, 59, tzinfo=timezone.utc)
+        octo = datetime(2026, 10, 1, 0, 1, tzinfo=timezone.utc)
+        await chat_store.record_usage(url, a, "t1", [_scan(100)], now=sept)
+        await chat_store.record_usage(url, a, "t1", [_scan(5 * GB), _scan(7, "failed")], now=octo)
+        await chat_store.record_usage(url, "b@tunedglobal.com", None, [_scan(999)], now=octo)
+        oct_usage = await chat_store.month_usage(url, a, now=datetime(2026, 10, 5, tzinfo=timezone.utc))
+        sep_usage = await chat_store.month_usage(url, a, now=sept)
+        nobody = await chat_store.month_usage(url, "c@tunedglobal.com")
+        await chat_store._engine(url).dispose()
+        return oct_usage, sep_usage, nobody
+
+    oct_usage, sep_usage, nobody = asyncio.run(go())
+    assert oct_usage == {"bytes": 5 * GB + 7, "queries": 2, "since": "2026-10-01T00:00:00Z"}
+    assert sep_usage["bytes"] == 100 and sep_usage["queries"] == 1
+    assert nobody["bytes"] == 0 and nobody["queries"] == 0
+
+
+def test_users_are_capped_unless_marked_uncapped(tmp_path):
+    url = _db(tmp_path)
+
+    async def go():
+        await chat_store.ensure_schema(url)
+        before = await chat_store.user_tier(url, "a@tunedglobal.com")
+        await chat_store.set_user_tier(url, "a@tunedglobal.com", chat_store.UNCAPPED)
+        after = await chat_store.user_tier(url, "a@tunedglobal.com")
+        await chat_store.set_user_tier(url, "a@tunedglobal.com", chat_store.CAPPED)
+        back = await chat_store.user_tier(url, "a@tunedglobal.com")
+        with pytest.raises(ValueError):
+            await chat_store.set_user_tier(url, "a@tunedglobal.com", "gold")
+        await chat_store._engine(url).dispose()
+        return before, after, back
+
+    assert asyncio.run(go()) == ("capped", "uncapped", "capped")
+
+
+def test_usage_outlives_the_chats_it_came_from():
+    """No foreign key to threads: the retention sweep deletes chats, not usage."""
+    usage = chat_store.SCHEMA.tables["query_usage"]
+    assert not usage.foreign_keys
+    assert "query_usage" not in "".join(
+        __import__("inspect").getsource(chat_store._delete_threads))
+
 
 @pytest.fixture
 def cl_app(monkeypatch):
@@ -130,26 +194,33 @@ def cl_app(monkeypatch):
     return importlib.reload(chainlit_app)
 
 
-def test_scans_are_handed_over_once_per_user(cl_app, monkeypatch):
-    import asyncio
-    from types import SimpleNamespace
-    monkeypatch.setattr(cl_app, "workgroup_scan_cutoff", lambda: 50 * GB)
-    scans = [{"bytes_scanned": 5, "status": "succeeded"}, {"bytes_scanned": 7, "status": "failed"}]
-    cl_app._hand_over_scans("a@tunedglobal.com", scans)
-    cl_app._hand_over_scans("b@tunedglobal.com", scans[:1])
-    a = SimpleNamespace(identifier="a@tunedglobal.com")
-    first = asyncio.run(cl_app.collect_usage(a)).body
-    second = asyncio.run(cl_app.collect_usage(a)).body
-    assert b'"bytes":5' in first and b'"bytes":7' in first
-    assert b'"scans":[]' in second                      # collected, then forgotten
-    assert b'"query_limit_bytes":53687091200' in first   # the bar's scale
-    assert "b@tunedglobal.com" in cl_app._PENDING_SCANS  # other users untouched
-
-
-def test_a_failed_run_still_hands_over_its_scans(cl_app):
+def test_every_question_saves_its_scans_even_when_it_fails(cl_app):
     src = inspect.getsource(cl_app.on_message)
-    assert "finally:\n        # A failed run's queries were billed too\n        _hand_over_scans(" in src
+    finally_block = src.split("finally:")[1].split("\n\n")[0]
+    assert "await _save_usage(ctx.user, ctx.scans)" in finally_block
     assert "user=_user_key()" in src
+
+
+def test_a_storage_failure_never_fails_the_answer(cl_app, monkeypatch, caplog):
+    async def broken(*a, **k):
+        raise RuntimeError("database is locked")
+    monkeypatch.setattr(cl_app.chat_store, "record_usage", broken)
+    monkeypatch.setattr(cl_app, "CHAT_DB_URL", "sqlite+aiosqlite:///x.db")
+    from types import SimpleNamespace
+    monkeypatch.setattr(cl_app.cl, "context", SimpleNamespace(session=SimpleNamespace(thread_id="t")))
+    asyncio.run(cl_app._save_usage("a@tunedglobal.com", [_scan(1)]))     # no exception
+    assert "could not record Athena usage" in caplog.text
+
+
+def test_the_meter_gets_the_month_and_the_tier(cl_app, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    url = _db(tmp_path)
+    asyncio.run(chat_store.ensure_schema(url))
+    asyncio.run(chat_store.record_usage(url, "a@tunedglobal.com", None, [_scan(42)]))
+    monkeypatch.setattr(cl_app, "CHAT_DB_URL", url)
+    body = asyncio.run(cl_app.usage_summary(SimpleNamespace(identifier="a@tunedglobal.com"))).body
+    asyncio.run(chat_store._engine(url).dispose())
+    assert b'"bytes":42' in body and b'"queries":1' in body and b'"tier":"capped"' in body
 
 
 def test_usage_route_is_post_only(cl_app):
@@ -172,26 +243,27 @@ def test_downloads_follow_the_workgroups_own_output_location(monkeypatch):
     assert aws._result_location("q1") == ("agent-results", "athena/q1.csv")
 
 
-def test_the_per_query_cutoff_is_read_from_the_workgroup(monkeypatch):
-    class Athena:
-        def get_work_group(self, WorkGroup):
-            return {"WorkGroup": {"Configuration": {"BytesScannedCutoffPerQuery": 50 * GB}}}
-    monkeypatch.setattr(aws, "_athena", lambda: Athena())
-    aws._cutoff_for.cache_clear()
-    assert aws._cutoff_for("datalake-agent") == 50 * GB
-
-    class Denied:
-        def get_work_group(self, WorkGroup):
-            raise RuntimeError("AccessDenied")
-    monkeypatch.setattr(aws, "_athena", lambda: Denied())
-    aws._cutoff_for.cache_clear()
-    assert aws._cutoff_for("datalake-agent") is None    # the bar is hidden then
-    aws._cutoff_for.cache_clear()
-
-
 def test_the_agent_uses_its_own_workgroup_by_default(monkeypatch):
     """Not `primary`, which the reporting pipelines share."""
     import config
     monkeypatch.delenv("ATHENA_WORKGROUP", raising=False)
     assert config._workgroup() == "datalake-agent"
     assert config.DEFAULTS["ATHENA_WORKGROUP"] == "datalake-agent"
+
+
+def test_the_agent_is_told_when_there_are_no_downloads(athena, monkeypatch):
+    """A single value gets no table or downloads; the agent used to promise
+    them anyway ("download the detailed results below")."""
+    import pandas as pd
+    athena()                                   # returns one row, one column
+    ctx = run_state.start_run()
+    ctx.dictionary_loaded = True
+    single = tools.sql_db_query.func("SELECT count(*) AS n FROM t")
+    assert "NO download buttons" in single and "don't mention" in single
+
+    table = pd.DataFrame({"label": ["a", "b"], "n": [1, 2]})
+    table.attrs["query_id"] = "q2"
+    monkeypatch.setattr(tools, "tracked_query", lambda *a, **k: table)
+    run_state.start_run().dictionary_loaded = True
+    listed = tools.sql_db_query.func("SELECT label, n FROM t")
+    assert "CSV and Excel download buttons" in listed

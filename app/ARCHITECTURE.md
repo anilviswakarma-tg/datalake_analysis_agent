@@ -24,7 +24,7 @@ rule is what keeps the graph acyclic, and `tests/test_wiring.py` enforces it.
 | `prompt.py` | ~165 | The agent system prompt. |
 | `tools.py` | ~510 | The 13 tools the agent can call. |
 | `agent.py` | ~40 | Assembles model + tools + prompt into the LangChain agent. |
-| `chat_store.py` | ~290 | Chat history: which database (`CHAT_DB_URL`), the portable schema, the result snapshot saved with each answer, favourite chats and the retention sweep (`CHAT_RETENTION_DAYS`, default 60). No UI imports. |
+| `chat_store.py` | ~290 | Chat history: which database (`CHAT_DB_URL`), the portable schema, the result snapshot saved with each answer, favourite chats and the retention sweep (`CHAT_RETENTION_DAYS`, default 60), Athena usage per query (`query_usage`) and user tiers (`user_tiers`). No UI imports. |
 | `ui.py` | ~205 | Styling, the agent catalogue, conversation buckets, rendering a run. |
 | `auth.py` | ~195 | Login screen, SSO/password paths, session expiry, dev bypass. |
 | `app.py` | ~360 | Streamlit page composition and run loop. Being retired. |

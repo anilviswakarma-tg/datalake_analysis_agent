@@ -72,22 +72,6 @@ def _with_credential_retry(fn, *args, retries: int = 3, delay: float = 1.5, **kw
 QUERY_TIMEOUT_SECONDS = 900
 
 
-@functools.lru_cache(maxsize=4)
-def _cutoff_for(workgroup: str) -> Optional[int]:
-    try:
-        wg = _athena().get_work_group(WorkGroup=workgroup)["WorkGroup"]
-        cutoff = wg.get("Configuration", {}).get("BytesScannedCutoffPerQuery")
-        return int(cutoff) if cutoff else None
-    except Exception:
-        return None
-
-
-def workgroup_scan_cutoff() -> Optional[int]:
-    """The workgroup's per-query scan cutoff in bytes, or None if it has
-    none or it can't be read (needs athena:GetWorkGroup). Read once."""
-    return _cutoff_for(_workgroup())
-
-
 def _fetch_s3_csv(query_id: str) -> bytes:
     """Read the complete Athena result CSV straight from S3.
 

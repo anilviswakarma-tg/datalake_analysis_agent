@@ -17,6 +17,7 @@ from __future__ import annotations
 import functools
 import json
 import os
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set
 
@@ -161,6 +162,33 @@ sa.Table(
 )
 
 
+# Ours: every Athena query the agent ran for a user and what it scanned, for
+# the usage meter and, later, caps. Deliberately no foreign key to threads:
+# usage must outlive the retention sweep that deletes old chats.
+sa.Table(
+    "query_usage", SCHEMA,
+    sa.Column("id", _id, primary_key=True),
+    sa.Column("userIdentifier", sa.Text, nullable=False),
+    sa.Column("threadId", _id),
+    sa.Column("queryId", sa.Text),
+    sa.Column("workgroup", sa.Text),
+    sa.Column("tool", sa.Text),
+    sa.Column("status", sa.Text),
+    sa.Column("bytesScanned", sa.BigInteger, nullable=False),
+    sa.Column("createdAt", sa.Text, nullable=False),
+    sa.Index("ix_query_usage_user_time", "userIdentifier", "createdAt"),
+)
+
+# Ours: which users are uncapped. A user with no row is capped. Caps are not
+# enforced yet; a limit column joins this table when they are.
+sa.Table(
+    "user_tiers", SCHEMA,
+    sa.Column("userIdentifier", sa.Text, primary_key=True),
+    sa.Column("tier", sa.Text, nullable=False),
+    sa.Column("updatedAt", sa.Text),
+)
+
+
 async def ensure_schema(url: str) -> None:
     """Create any missing tables. Idempotent, and additive only: it never
     alters an existing table, so a column added in a Chainlit upgrade needs
@@ -270,6 +298,73 @@ async def _delete_threads(conn, ids: Iterable[str]) -> None:
         table = _t(name)
         await conn.execute(table.delete().where(table.c.threadId.in_(ids)))
     await conn.execute(_t("threads").delete().where(_t("threads").c.id.in_(ids)))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ATHENA USAGE AND TIERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+CAPPED, UNCAPPED = "capped", "uncapped"
+TIERS = (CAPPED, UNCAPPED)
+
+
+async def record_usage(url: str, user_identifier: str, thread_id: Optional[str],
+                       scans: List[Dict[str, Any]], now: Optional[datetime] = None) -> None:
+    """Store a question's Athena scans (run_state.RunContext.scans)."""
+    if not scans or not user_identifier:
+        return
+    at = _iso(now or datetime.now(timezone.utc))
+    rows = [{"id": str(uuid.uuid4()), "userIdentifier": user_identifier,
+             "threadId": thread_id, "queryId": sc.get("query_id"),
+             "workgroup": sc.get("workgroup") or None, "tool": sc.get("tool"),
+             "status": sc.get("status"), "bytesScanned": int(sc.get("bytes_scanned") or 0),
+             "createdAt": at} for sc in scans]
+    async with _engine(url).begin() as conn:
+        await conn.execute(_t("query_usage").insert(), rows)
+
+
+def month_start(now: Optional[datetime] = None) -> datetime:
+    """Midnight UTC on the first of the current month."""
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+async def month_usage(url: str, user_identifier: str,
+                      now: Optional[datetime] = None) -> Dict[str, Any]:
+    """This calendar month's (UTC) bytes scanned and query count for a user."""
+    since = month_start(now)
+    until = month_start(since + timedelta(days=32))      # the next month's first
+    usage = _t("query_usage")
+    query = (sa.select(sa.func.coalesce(sa.func.sum(usage.c.bytesScanned), 0),
+                       sa.func.count(usage.c.id))
+             .where(usage.c.userIdentifier == user_identifier)
+             .where(usage.c.createdAt >= _iso(since))
+             .where(usage.c.createdAt < _iso(until)))
+    async with _engine(url).connect() as conn:
+        total, count = (await conn.execute(query)).one()
+    return {"bytes": int(total), "queries": int(count), "since": _iso(since)}
+
+
+async def user_tier(url: str, user_identifier: str) -> str:
+    """'capped' unless the user has an 'uncapped' row in user_tiers."""
+    tiers = _t("user_tiers")
+    async with _engine(url).connect() as conn:
+        tier = (await conn.execute(sa.select(tiers.c.tier)
+                                   .where(tiers.c.userIdentifier == user_identifier))
+                ).scalar_one_or_none()
+    return tier if tier in TIERS else CAPPED
+
+
+async def set_user_tier(url: str, user_identifier: str, tier: str) -> None:
+    """Mark a user capped or uncapped (no admin screen yet; for scripts)."""
+    if tier not in TIERS:
+        raise ValueError(f"tier must be one of {TIERS}")
+    tiers = _t("user_tiers")
+    async with _engine(url).begin() as conn:
+        await conn.execute(tiers.delete().where(tiers.c.userIdentifier == user_identifier))
+        await conn.execute(tiers.insert().values(
+            userIdentifier=user_identifier, tier=tier,
+            updatedAt=_iso(datetime.now(timezone.utc))))
 
 
 # ═══════════════════════════════════════════════════════════════════════════

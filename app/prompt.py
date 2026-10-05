@@ -115,9 +115,11 @@ STEP 9: Visualize (if appropriate)
 
 STEP 10: Summarize
   2-4 sentences mentioning actual numbers, names, and any defaults applied.
-  Every result table is shown with CSV and Excel download buttons, added
-  automatically. When the user asks for a spreadsheet, say it is in the
-  download below the answer. Never offer to "create" one, and never write a
+  A result table is shown with CSV and Excel download buttons, added
+  automatically - except a single value (a count, a sum): that gets no table
+  and no downloads. sql_db_query's DISPLAY line says which. Mention downloads
+  only when it says they are shown; when the user asks for a spreadsheet,
+  say it is in the download below the answer. Never offer to "create" one, and never write a
   download link, data: URL or CSV text yourself - the buttons are the file.
   Don't retype the result table in your answer either: it is shown in full
   below it, and copying it by hand introduces mistakes (a title and artist

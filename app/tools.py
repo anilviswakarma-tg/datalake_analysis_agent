@@ -15,7 +15,7 @@ from config import DATA_DICT_DIR, VALID_DOMAINS, _known_databases
 from entities import _fuzzy_match, _load_groups, _load_musicowners
 from knowledge import (_append_feedback, _data_dict_index, _data_dict_preamble,
                        _normalise_table_name)
-from results import CHART_TYPES, fmt_bytes
+from results import CHART_TYPES, fmt_bytes, is_scalar_result
 from run_state import (_add_notice, _record, _stash_result, check_query_allowed,
                        current_run, record_query, tracked_query)
 
@@ -430,9 +430,16 @@ def sql_db_query(query: str) -> str:
         _stash_result(df)
         preview = df.head(10).to_string(index=False, max_cols=8)[:1500]
         _record("sql_db_query", f"✅ {len(df)} rows")
+        # Tell the agent what the user will see, so it never promises
+        # downloads that a single-value answer doesn't get.
+        shown = ("DISPLAY: a single value. The user gets NO table and NO "
+                 "download buttons for it - state the value; don't mention "
+                 "downloads." if is_scalar_result(df) else
+                 "DISPLAY: shown to the user as a table with CSV and Excel "
+                 "download buttons under your answer.")
         return (
             f"Query succeeded. {len(df)} rows returned "
-            f"(query_id={df.attrs.get('query_id')}).\n\n"
+            f"(query_id={df.attrs.get('query_id')}).\n{shown}\n\n"
             f"Preview (first 10 rows):\n{preview}"
         )
     except AthenaQueryError as e:

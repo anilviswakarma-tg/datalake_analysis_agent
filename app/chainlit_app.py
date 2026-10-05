@@ -32,9 +32,9 @@ from fastapi.responses import JSONResponse
 import access
 import chat_store
 from agent import build_agent
-from aws import _fetch_s3_csv, workgroup_scan_cutoff
+from aws import _fetch_s3_csv
 from chainlit_data import build_data_layer
-from config import DATA_DICT_DIR, FEEDBACK_FILE, _openai_key_looks_real, _workgroup
+from config import DATA_DICT_DIR, FEEDBACK_FILE, _openai_key_looks_real
 from entities import _ENTITY_CACHE
 from models import (_MODEL_REGISTRY, explain_failure, message_text,
                     missing_key_reason, model_label)
@@ -170,34 +170,38 @@ if CHAT_DB_URL:
 # ═══════════════════════════════════════════════════════════════════════════
 # ATHENA USAGE
 # ═══════════════════════════════════════════════════════════════════════════
-# What each question scanned is handed to the browser, which keeps the
-# running total for its session (public/app.js, sessionStorage). Nothing is
-# stored here: a question's scans wait in memory only until the page
-# collects them, right after the answer arrives. The real cap is the agent
-# workgroup's per-query scan cutoff (ATHENA_WORKGROUP).
-
-_PENDING_SCANS: Dict[str, List[Dict[str, Any]]] = {}
-_MAX_PENDING = 200          # per user, in case a page never collects
+# Every Athena query a question ran is stored with what it scanned
+# (chat_store.query_usage), failed ones included, and the page shows the
+# user's total for the calendar month. Users are capped unless user_tiers
+# marks them uncapped; caps themselves are not enforced yet. The hard limit
+# today is the agent workgroup's per-query scan cutoff (ATHENA_WORKGROUP).
 
 
-def _hand_over_scans(user_key: Optional[str], scans: List[Dict[str, Any]]) -> None:
-    if user_key and scans:
-        pending = _PENDING_SCANS.setdefault(user_key, [])
-        pending.extend({"bytes": s["bytes_scanned"], "status": s["status"]} for s in scans)
-        del pending[:-_MAX_PENDING]
+async def _save_usage(user_key: Optional[str], scans: List[Dict[str, Any]]) -> None:
+    """Never lets a storage problem turn into a failed answer."""
+    if not (CHAT_DB_URL and user_key and scans):
+        return
+    try:
+        thread_id = getattr(cl.context.session, "thread_id", None)
+        await chat_store.record_usage(CHAT_DB_URL, user_key, thread_id, scans)
+    except Exception:
+        log.exception("could not record Athena usage")
 
 
-async def collect_usage(current_user: UserParam):
-    """The scans made since the page last asked, for its session total."""
+async def usage_summary(current_user: UserParam):
+    """This month's Athena usage and the user's tier, for the meter."""
     if not current_user:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    return JSONResponse({"scans": _PENDING_SCANS.pop(current_user.identifier, []),
-                         "workgroup": _workgroup(),
-                         "query_limit_bytes": workgroup_scan_cutoff()})
+    usage = await chat_store.month_usage(CHAT_DB_URL, current_user.identifier)
+    usage["tier"] = await chat_store.user_tier(CHAT_DB_URL, current_user.identifier)
+    return JSONResponse(usage)
 
 
-cl_server.app.add_api_route(f"{cl_config.run.root_path or ''}/datalake/usage", collect_usage,
-                            methods=["POST"])
+if CHAT_DB_URL:
+    # Without a database there is nowhere to keep usage; the page then shows
+    # no meter (it gets a 404 here).
+    cl_server.app.add_api_route(f"{cl_config.run.root_path or ''}/datalake/usage",
+                                usage_summary, methods=["POST"])
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -580,7 +584,7 @@ async def on_message(message: cl.Message):
         return
     finally:
         # A failed run's queries were billed too
-        _hand_over_scans(ctx.user, ctx.scans)
+        await _save_usage(ctx.user, ctx.scans)
 
     elements, captions = await _result_parts(ctx.dataframe, ctx.query_id, ctx.chart, dev)
     if dev and ctx.scans:
