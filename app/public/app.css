@@ -180,3 +180,10 @@ a[href*="chainlit.io"],
   white-space: nowrap; cursor: default;
 }
 .dl-usage:hover { background: rgba(255,255,255,0.05); }
+
+/* A refusal the user must see, e.g. the favourites cap (app.js notify). */
+.dl-notice {
+  position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 60;
+  max-width: calc(100% - 32px); background: #4a1f14; color: #ffd9cc;
+  border: 1px solid #E85420; border-radius: 8px; padding: 8px 14px; font-size: 14px;
+}

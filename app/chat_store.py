@@ -247,9 +247,35 @@ def _t(name: str) -> sa.Table:
     return SCHEMA.tables[name]
 
 
+def favourites_max() -> int:
+    """Most favourite chats one user may keep (FAVOURITES_MAX, default 20;
+    0 = no cap). Favourites are exempt from the retention sweep, so without a
+    cap they are the one part of chat history that grows without bound."""
+    try:
+        return max(0, int(os.getenv("FAVOURITES_MAX", "20")))
+    except ValueError:
+        return 20
+
+
+class FavouriteLimitReached(Exception):
+    def __init__(self, limit: int):
+        super().__init__(f"favourite limit of {limit} reached")
+        self.limit = limit
+
+
 async def set_favourite(url: str, thread_id: str, user_identifier: str, favourite: bool) -> None:
+    """Raises FavouriteLimitReached when adding one would take the user past
+    favourites_max(). Re-favouriting a chat that already is one is fine."""
     table = _t("favourite_threads")
+    limit = favourites_max()
     async with _engine(url).begin() as conn:
+        if favourite and limit:
+            others = await conn.scalar(
+                sa.select(sa.func.count()).select_from(table)
+                .where(table.c.userIdentifier == user_identifier,
+                       table.c.threadId != thread_id))
+            if others >= limit:
+                raise FavouriteLimitReached(limit)
         await conn.execute(table.delete().where(table.c.threadId == thread_id))
         if favourite:
             await conn.execute(table.insert().values(

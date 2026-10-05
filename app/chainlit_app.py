@@ -149,7 +149,8 @@ if CHAT_DB_URL:
     async def _favourites_state(user: Any) -> JSONResponse:
         chats = await chat_store.favourite_chats(CHAT_DB_URL, user.identifier)
         return JSONResponse({"favourites": chats,
-                             "retention_days": chat_store.retention_days()})
+                             "retention_days": chat_store.retention_days(),
+                             "max_favourites": chat_store.favourites_max()})
 
     async def list_favourite_chats(current_user: UserParam):
         if not current_user:
@@ -160,8 +161,13 @@ if CHAT_DB_URL:
         if not current_user:
             raise HTTPException(status_code=401, detail="Unauthorized")
         await is_thread_author(current_user.identifier, thread_id)   # 401/404 otherwise
-        await chat_store.set_favourite(CHAT_DB_URL, thread_id, current_user.identifier,
-                                       bool(payload.get("favourite")))
+        try:
+            await chat_store.set_favourite(CHAT_DB_URL, thread_id, current_user.identifier,
+                                           bool(payload.get("favourite")))
+        except chat_store.FavouriteLimitReached as e:
+            return JSONResponse(status_code=409, content={
+                "error": f"You can keep up to {e.limit} favourite chats. "
+                         "Remove one to add this chat."})
         return await _favourites_state(current_user)
 
     _root = cl_config.run.root_path or ""

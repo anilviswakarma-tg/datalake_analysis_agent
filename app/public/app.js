@@ -223,6 +223,7 @@
   // generated stylesheet so Chainlit's own list items are never touched.
   var favourites = null;       // Set of favourite chat ids, once loaded
   var retentionDays = 0;
+  var maxFavourites = 0;       // per user (FAVOURITES_MAX); 0 = no cap
   var starSheet = null;
 
   function currentChatId() {
@@ -237,6 +238,7 @@
     favList = state.favourites;
     favourites = new Set(favList.map(function (f) { return f.id; }));
     retentionDays = state.retention_days || 0;
+    maxFavourites = state.max_favourites || 0;
     if (!starSheet) {
       starSheet = el("style");
       document.head.appendChild(starSheet);
@@ -311,7 +313,27 @@
       method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body || {})
-    }).then(function (r) { return r.ok ? r.json() : null; });
+    }).then(function (r) {
+      if (r.ok) return r.json();
+      // 409: the user is at the favourites cap; the server says so in words
+      if (r.status === 409) return r.json().then(function (b) { notify(b.error); return null; });
+      return null;
+    });
+  }
+
+  // A short message under the title bar, for refusals the user must see.
+  function notify(text) {
+    if (!text) return;
+    var old = document.querySelector(".dl-notice");
+    if (old) old.remove();
+    var n = el("div", "dl-notice", text);
+    n.setAttribute("role", "alert");
+    document.body.appendChild(n);
+    setTimeout(function () { n.remove(); }, 6000);
+  }
+
+  function atFavouritesCap() {
+    return maxFavourites > 0 && favourites && favourites.size >= maxFavourites;
   }
 
   function applyFavouriteButton() {
@@ -332,11 +354,17 @@
     b.dataset.fav = String(isFav);
     b.title = isFav
       ? "A favourite: kept until you remove it from favourites."
-      : "Add to favourites to keep it. Other chats are deleted after " +
-        retentionDays + " days without activity.";
+      : atFavouritesCap()
+        ? "You've reached the limit of " + maxFavourites + " favourite chats. " +
+          "Remove one to add this chat."
+        : "Add to favourites to keep it. Other chats are deleted after " +
+          retentionDays + " days without activity.";
     b.addEventListener("click", function () {
       b.disabled = true;
-      setFavourite(id, !isFav).catch(function () { b.disabled = false; });
+      // Re-enabled whatever happens: a refused or failed save leaves the
+      // chat as it was, and the button must still work.
+      var enable = function () { b.disabled = false; };
+      setFavourite(id, !isFav).then(enable, enable);
     });
     header.appendChild(b);
   }

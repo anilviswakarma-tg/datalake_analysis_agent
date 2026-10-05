@@ -237,6 +237,26 @@ def test_favourite_routes_are_post_and_signed_in(cl_app):
     assert src.index("is_thread_author") < src.index("set_favourite(")
 
 
+def test_the_favourites_cap_is_reported_not_raised(cl_app, monkeypatch):
+    """At the cap the route answers 409 with words for the user (app.js
+    shows them), and the page learns the cap from the favourites state."""
+    import asyncio
+    from types import SimpleNamespace
+
+    async def owner(*a):
+        return True
+
+    async def at_cap(*a):
+        raise cl_app.chat_store.FavouriteLimitReached(20)
+    monkeypatch.setattr(cl_app, "is_thread_author", owner)
+    monkeypatch.setattr(cl_app.chat_store, "set_favourite", at_cap)
+    response = asyncio.run(cl_app.set_favourite_chat(
+        "t1", {"favourite": True}, SimpleNamespace(identifier="a@tunedglobal.com")))
+    assert response.status_code == 409
+    assert b"You can keep up to 20 favourite chats" in response.body
+    assert '"max_favourites": chat_store.favourites_max()' in inspect.getsource(cl_app._favourites_state)
+
+
 def test_fonts_are_served_as_fonts(cl_app):
     import mimetypes
     assert mimetypes.guess_type("x.woff2")[0] == "font/woff2"

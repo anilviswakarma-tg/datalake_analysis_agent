@@ -271,6 +271,41 @@ def test_adding_and_removing_a_favourite(db_url):
     assert after == {"old"}
 
 
+def test_favourites_are_capped_per_user(db_url, monkeypatch):
+    """Favourites skip the retention sweep, so without a cap they would be
+    the one part of history that grows without bound."""
+    monkeypatch.setenv("FAVOURITES_MAX", "2")
+    url, build, _ = _retention_db(db_url)          # "kept" is already a favourite
+    a, b = "a@tunedglobal.com", "b@tunedglobal.com"
+
+    async def go():
+        await build()
+        await chat_store.set_favourite(url, "old", a, True)          # 2 of 2
+        await chat_store.set_favourite(url, "old", a, True)          # again: still allowed
+        with pytest.raises(chat_store.FavouriteLimitReached) as refused:
+            await chat_store.set_favourite(url, "active", a, True)
+        at_cap = await chat_store.favourite_thread_ids(url, a)
+        await chat_store.set_favourite(url, "active", b, True)       # the cap is per user
+        await chat_store.set_favourite(url, "kept", a, False)        # make room...
+        await chat_store.set_favourite(url, "active", a, True)       # ...and it fits
+        after = await chat_store.favourite_thread_ids(url, a)
+        await chat_store._engine(url).dispose()
+        return refused.value.limit, at_cap, after
+
+    limit, at_cap, after = asyncio.run(go())
+    assert limit == 2 and at_cap == {"kept", "old"}
+    assert after == {"old", "active"}
+
+
+@pytest.mark.parametrize("value,cap", [(None, 20), ("5", 5), ("0", 0), ("-1", 0), ("x", 20)])
+def test_favourites_cap_setting(monkeypatch, value, cap):
+    if value is None:
+        monkeypatch.delenv("FAVOURITES_MAX", raising=False)
+    else:
+        monkeypatch.setenv("FAVOURITES_MAX", value)
+    assert chat_store.favourites_max() == cap
+
+
 @pytest.mark.parametrize("value,days", [(None, 60), ("90", 90), ("0", 0), ("-5", 0), ("x", 60)])
 def test_retention_days_setting(monkeypatch, value, days):
     if value is None:
