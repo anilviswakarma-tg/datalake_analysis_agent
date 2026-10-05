@@ -457,6 +457,10 @@
       fmtBytes(usage.bytes) + " across " + usage.queries +
       (usage.queries === 1 ? " query" : " queries") + ", " + fmtCost(usage.bytes) +
       " at $" + USD_PER_TB + "/TB." +
+      (usage.reuse_minutes
+        ? "\nAsking the same query again within " + usage.reuse_minutes +
+          " minutes returns the cached result, at no extra cost."
+        : "") +
       (usage.tier === "uncapped" ? "\nYour account is uncapped." : "");
   }
 

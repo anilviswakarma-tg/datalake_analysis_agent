@@ -208,6 +208,36 @@ default (`docker-compose.yml` now runs both, Chainlit on 8000 with the
 `data/` volume), and restrict `allow_origins` in `.chainlit/config.toml` to
 the real host.
 
+**Incident 2026-10-05: repeated identical Athena queries.** On `primary`,
+the deployed (Streamlit) agent ran one SPLH rights query 64 times
+(05:51-06:44 UTC, 22.42 GiB each, ~1.4 TiB) and, earlier, an owner-rights
+query 19 times (03:14-03:31, ~75 GiB), with no result reuse. Each repeat was
+a fresh run of the question: the per-question guards (duplicate SQL, 8
+queries) reset every time. Likely trigger, unverified: Streamlit re-running
+the page after the browser connection dropped during a slow query, which
+replays the last question; only the 10-54 s queries looped. Fixed in the
+shared code (both UIs):
+- Athena result reuse on every query (120 min): an identical repeat, in
+  any chat, returns the stored result and scans 0. Users see a notice when
+  that happens. (A per-chat repeat guard was built and then dropped as
+  redundant with this; the per-question duplicate guard stays.)
+- Partial results are described to the agent as complete-for-answering,
+  with the full size, and it is told never to re-run to see more.
+- A scan budget per chat (`ATHENA_SESSION_SCAN_BUDGET_GB`, default 50).
+  Chainlit asks Continue/Stop; Streamlit stops until the conversation is
+  cleared.
+Replayed in `tests/test_incident_guards.py`: 64 fresh questions, one scan.
+Note a replay loop still runs the agent each time (model calls, no answer
+for the user); only its Athena cost is gone. The replay itself needs fixing
+in Streamlit. Chainlit doesn't replay: tested by cutting the browser's
+network for 35 s mid-question, the query ran once. Two Chainlit reconnect
+gaps found in that test are fixed (`tests/test_reconnect.py`): an answer
+finished while the browser was away is now shown by reloading the chat once
+it is back, and the scan budget is kept by chat id, so a reconnect or
+reload no longer resets it.
+**The deployed agent has none of this until it is redeployed.** Check the
+server's proxy/load balancer idle timeout too.
+
 **Usage tiers (2026-10-05): capped and uncapped, caps not enforced yet.**
 Every user is capped unless `user_tiers` marks them uncapped. There is no
 admin screen; to change one:

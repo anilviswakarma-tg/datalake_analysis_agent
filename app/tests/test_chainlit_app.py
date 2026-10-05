@@ -143,12 +143,12 @@ def test_new_chat_keeps_the_users_last_model(cl_app, monkeypatch):
     assert default_of(cl_app._model_mode()) == [cl_app.DEFAULT_MODEL_CHOICE]
     cl_app._LAST_MODEL["a@tunedglobal.com"] = other
     assert default_of(cl_app._model_mode()) == [other]
-    assert "_LAST_MODEL[key] = model_choice" in inspect.getsource(cl_app.on_message)
+    assert "_LAST_MODEL[key] = model_choice" in inspect.getsource(cl_app._answer)
 
 
 def test_chainlit_run_starts_a_run_context(cl_app):
     """on_message must scope the run with start_run(), never a global."""
-    src = inspect.getsource(cl_app.on_message)
+    src = inspect.getsource(cl_app._answer)
     assert "start_run(question=question, model_choice=model_choice" in src
     assert "_preflight_problem(" in src
     assert src.index("_preflight_problem(") < src.index("start_run(")

@@ -70,6 +70,9 @@ def _with_credential_retry(fn, *args, retries: int = 3, delay: float = 1.5, **kw
 
 
 QUERY_TIMEOUT_SECONDS = 900
+# Athena returns a stored result for identical SQL run within this window,
+# scanning nothing. With it off, a 2026-10-05 loop rescanned 22 GiB 64 times.
+RESULT_REUSE_MINUTES = 120   # results up to 2 h old; track_active refreshes hourly
 
 
 def _fetch_s3_csv(query_id: str) -> bytes:
@@ -144,6 +147,8 @@ def _run_athena_query(
         start_kwargs["QueryExecutionContext"] = {"Database": database}
     if _output_s3():
         start_kwargs["ResultConfiguration"] = {"OutputLocation": _output_s3()}
+    start_kwargs["ResultReuseConfiguration"] = {"ResultReuseByAgeConfiguration": {
+        "Enabled": True, "MaxAgeInMinutes": RESULT_REUSE_MINUTES}}
 
     # First call uses a fresh client each retry attempt (see
     # _with_credential_retry) in case of a transient IMDS hiccup. Once it
@@ -174,10 +179,30 @@ def _run_athena_query(
                                    qid, _bytes_scanned(execution), state)
         time.sleep(1.5)
 
+    df = _read_results(athena, qid, limit_rows)
+    df.attrs["bytes_scanned"] = _bytes_scanned(execution)
+    df.attrs["reused"] = bool((execution.get("Statistics") or {})
+                              .get("ResultReuseInformation", {}).get("ReusedPreviousResult"))
+    df.attrs["workgroup"] = start_kwargs["WorkGroup"]
+    return df
+
+
+def result_size_bytes(query_id: str) -> Optional[int]:
+    """Size of a query's full result CSV, or None if it can't be read."""
+    try:
+        bucket, key = _result_location(query_id)
+        return int(_session().client("s3").head_object(Bucket=bucket, Key=key)["ContentLength"])
+    except Exception:
+        return None
+
+
+def _read_results(athena, qid: str, limit_rows: int) -> pd.DataFrame:
+    """Up to limit_rows of a query's result. df.attrs["truncated"] says
+    whether there was more than that."""
     paginator = athena.get_paginator("get_query_results")
     rows: List[List[Any]] = []
     columns: List[str] = []
-    fetched = 0
+    truncated = False
     for i, page in enumerate(paginator.paginate(QueryExecutionId=qid)):
         rs = page["ResultSet"]
         if i == 0:
@@ -186,17 +211,16 @@ def _run_athena_query(
         else:
             data_rows = rs["Rows"]
         for r in data_rows:
-            if fetched >= limit_rows:
+            if len(rows) >= limit_rows:
+                truncated = True
                 break
             rows.append([cell.get("VarCharValue") for cell in r["Data"]])
-            fetched += 1
-        if fetched >= limit_rows:
+        if truncated:
             break
 
     df = pd.DataFrame(rows, columns=columns)
     df.attrs["query_id"] = qid
-    df.attrs["bytes_scanned"] = _bytes_scanned(execution)
-    df.attrs["workgroup"] = start_kwargs["WorkGroup"]
+    df.attrs["truncated"] = truncated
     for col in df.columns:
         try:
             df[col] = pd.to_numeric(df[col])

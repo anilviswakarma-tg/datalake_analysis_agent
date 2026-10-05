@@ -77,8 +77,10 @@ def _current_runs() -> list:
 
 
 def _clear_current_runs() -> None:
-    """Reset just the active agent's conversation."""
+    """Reset just the active agent's conversation, and the session's repeat
+    guard and scan budget with it."""
     st.session_state.setdefault("runs_by_agent", {})[_runs_bucket_key()] = []
+    st.session_state.pop("ledger", None)
 
 
 def render_chart(df: pd.DataFrame, chart: Dict[str, str]) -> None:

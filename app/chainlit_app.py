@@ -16,15 +16,18 @@ import io
 import logging
 import mimetypes
 import os
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 
 import chainlit as cl
 import chainlit.server as cl_server
 import pandas as pd
 from chainlit.config import config as cl_config
+from chainlit.data import get_data_layer
 from chainlit.data.acl import is_thread_author
 from chainlit.input_widget import Switch
 from chainlit.server import UserParam
+from chainlit.session import WebsocketSession
 from chainlit.utils import utc_now
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
@@ -32,7 +35,7 @@ from fastapi.responses import JSONResponse
 import access
 import chat_store
 from agent import build_agent
-from aws import _fetch_s3_csv
+from aws import RESULT_REUSE_MINUTES, _fetch_s3_csv
 from chainlit_data import build_data_layer
 from config import DATA_DICT_DIR, FEEDBACK_FILE, _openai_key_looks_real
 from entities import _ENTITY_CACHE
@@ -40,7 +43,7 @@ from models import (_MODEL_REGISTRY, explain_failure, message_text,
                     missing_key_reason, model_label)
 from results import (df_to_csv_bytes, df_to_excel_bytes, fmt_bytes,
                      is_scalar_result, plotly_figure)
-from run_state import DEFAULT_MODEL_CHOICE, start_run
+from run_state import DEFAULT_MODEL_CHOICE, SessionLedger, start_run
 from tools import friendly_status
 
 log = logging.getLogger(__name__)
@@ -194,6 +197,7 @@ async def usage_summary(current_user: UserParam):
         raise HTTPException(status_code=401, detail="Unauthorized")
     usage = await chat_store.month_usage(CHAT_DB_URL, current_user.identifier)
     usage["tier"] = await chat_store.user_tier(CHAT_DB_URL, current_user.identifier)
+    usage["reuse_minutes"] = RESULT_REUSE_MINUTES
     return JSONResponse(usage)
 
 
@@ -358,6 +362,92 @@ async def _run_command(command: str) -> None:
         text = (FEEDBACK_FILE.read_text(encoding="utf-8") if FEEDBACK_FILE.exists()
                 else "_feedback.md does not exist yet._")
         await cl.Message(content=f"**knowledge/feedback.md**\n\n{text}").send()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# A CHAT ACROSS RECONNECTS
+# ═══════════════════════════════════════════════════════════════════════════
+# Re-check both of these after a Chainlit upgrade (tests/test_reconnect.py):
+# - On a reconnect to a reopened chat, Chainlit replaces cl.user_session with
+#   the JSON copy it saved at disconnect, which drops anything that isn't
+#   JSON, and a page reload starts a new session altogether. So each chat's
+#   scan ledger lives here, by thread id, not in the user session.
+# - Anything sent while the browser is disconnected is lost: Chainlit has no
+#   resend. The answer is still saved, so if the connection dropped during a
+#   question, the page is told to reload once it is back, and reopens the
+#   chat from the database with the full answer. A connection that went
+#   silent looks fine to the server until a heartbeat is missed, so the
+#   watch runs on for that long after the answer (RECONNECT_GRACE_SECONDS).
+
+_LEDGERS: OrderedDict[str, SessionLedger] = OrderedDict()
+_MAX_LEDGERS = 10_000           # a few numbers each; oldest-used dropped first
+SAVE_WAIT_SECONDS = 15          # for Chainlit's background write of the answer
+POLL_SECONDS = 0.5
+# Socket.IO's heartbeat interval plus timeout, with a margin: how long a dead
+# connection can still look connected.
+RECONNECT_GRACE_SECONDS = cl_server.sio.eio.ping_interval + cl_server.sio.eio.ping_timeout + 15
+
+
+def _ledger() -> SessionLedger:
+    """This chat's scan ledger (run_state.SessionLedger)."""
+    thread_id = cl.context.session.thread_id
+    ledger = _LEDGERS.pop(thread_id, None) or SessionLedger()
+    _LEDGERS[thread_id] = ledger
+    while len(_LEDGERS) > _MAX_LEDGERS:
+        _LEDGERS.popitem(last=False)
+    return ledger
+
+
+def _connected(socket_id: str) -> bool:
+    return cl_server.sio.manager.is_connected(socket_id, "/")
+
+
+def _reload_if_disconnected(started_on: str, sent: Optional[cl.Message]) -> None:
+    """After a question, watch for the browser having lost its connection
+    since it asked, in which case it may have missed part of the answer."""
+    if get_data_layer() is None:          # no history to reload from
+        return
+    asyncio.create_task(_reload_after_reconnect(
+        cl.context.session, started_on, sent.id if sent else None))
+
+
+async def _reload_after_reconnect(session, started_on: str,
+                                  message_id: Optional[str]) -> None:
+    """Reload the page if the session moves to a new socket (a reconnect)
+    while the question ran or within the grace period after it. Once the old
+    socket is known to be down, wait for the reconnect up to Chainlit's
+    session_timeout, after which Chainlit drops the session anyway."""
+    loop = asyncio.get_running_loop()
+    grace_ends = loop.time() + RECONNECT_GRACE_SECONDS
+    give_up = loop.time() + cl_config.project.session_timeout
+    while session.socket_id == started_on:
+        if _connected(started_on) and loop.time() > grace_ends:
+            return                        # the connection held
+        if loop.time() > give_up or WebsocketSession.get_by_id(session.id) is None:
+            return
+        await asyncio.sleep(POLL_SECONDS)
+    await _wait_until_saved(session.thread_id, message_id)
+    log.info("reloading chat %s: its connection dropped during a question",
+             session.thread_id)
+    await session.emit("reload", {})
+
+
+async def _wait_until_saved(thread_id: str, message_id: Optional[str]) -> None:
+    """Chainlit saves messages in background tasks; reloading before the
+    answer is written would reopen the chat without it."""
+    loop = asyncio.get_running_loop()
+    give_up = loop.time() + SAVE_WAIT_SECONDS
+    while message_id and loop.time() < give_up:
+        try:
+            thread = await get_data_layer().get_thread(thread_id)
+        except Exception:
+            log.exception("could not read chat %s", thread_id)
+            return
+        if any(step.get("id") == message_id for step in (thread or {}).get("steps", [])):
+            return
+        await asyncio.sleep(POLL_SECONDS)
+    if not message_id:           # nothing to look for: allow the write a moment
+        await asyncio.sleep(4 * POLL_SECONDS)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -544,6 +634,26 @@ async def _result_parts(df: Optional[pd.DataFrame], query_id: Optional[str],
     return elements, captions
 
 
+async def _continue_past_budget(ledger: SessionLedger) -> bool:
+    """The chat has scanned its budget: ask before running anything more."""
+    dollars = ledger.bytes_scanned / 1024 ** 4 * 5
+    reply = await cl.AskActionMessage(
+        content=(f"This chat has scanned **{fmt_bytes(ledger.bytes_scanned)}** of Athena "
+                 f"data (about ${dollars:.2f}), over its "
+                 f"{fmt_bytes(ledger.allowance)} budget. Continue with this question?"),
+        actions=[cl.Action(name="continue", payload={"choice": "continue"},
+                           label="Continue"),
+                 cl.Action(name="stop", payload={"choice": "stop"}, label="Stop")],
+        timeout=600,
+    ).send()
+    if reply and (reply.get("payload") or {}).get("choice") == "continue":
+        ledger.extend()
+        return True
+    await cl.Message(content="Stopped: no more queries run in this chat. "
+                             "Start a new chat to begin again.").send()
+    return False
+
+
 def _failure_text(e: Exception, dev: bool) -> str:
     # A quota or auth failure has a specific remedy; "try again" is wrong
     # advice for both.
@@ -557,6 +667,16 @@ def _failure_text(e: Exception, dev: bool) -> str:
 
 @cl.on_message
 async def on_message(message: cl.Message):
+    socket_id = cl.context.session.socket_id
+    sent: Optional[cl.Message] = None
+    try:
+        sent = await _answer(message)
+    finally:
+        _reload_if_disconnected(socket_id, sent)
+
+
+async def _answer(message: cl.Message) -> Optional[cl.Message]:
+    """Answer one question. Returns the last message sent, if any."""
     if message.command:
         await _run_command(message.command)
         return
@@ -569,19 +689,21 @@ async def on_message(message: cl.Message):
     if key := _user_key():
         _LAST_MODEL[key] = model_choice
     if problem := _preflight_problem(model_choice, live):
-        await cl.Message(content=f"⚠️ {problem}").send()
-        return
+        return await cl.Message(content=f"⚠️ {problem}").send()
+
+    ledger = _ledger()
+    if ledger.over_budget() and not await _continue_past_budget(ledger):
+        return None
 
     # This user's question, model and live flag, and the slot the tools write
     # results into. Scoped to this task's context, never process-wide.
     ctx = start_run(question=question, model_choice=model_choice, execute_live=live,
-                    user=_user_key() or "")
+                    user=_user_key() or "", session=ledger)
     try:
         final_answer, answer = await _stream_agent(_history_messages(question), dev)
     except Exception as e:
         log.exception("agent run failed")
-        await cl.Message(content=_failure_text(e, dev)).send()
-        return
+        return await cl.Message(content=_failure_text(e, dev)).send()
     finally:
         # A failed run's queries were billed too
         await _save_usage(ctx.user, ctx.scans)
@@ -601,3 +723,4 @@ async def on_message(message: cl.Message):
     await answer.send()
 
     cl.user_session.get("history").append({"question": question, "answer": final_answer})
+    return answer

@@ -191,7 +191,7 @@ def cl_app(monkeypatch):
 
 
 def test_every_question_saves_its_scans_even_when_it_fails(cl_app):
-    src = inspect.getsource(cl_app.on_message)
+    src = inspect.getsource(cl_app._answer)
     finally_block = src.split("finally:")[1].split("\n\n")[0]
     assert "await _save_usage(ctx.user, ctx.scans)" in finally_block
     assert "user=_user_key()" in src

@@ -10,6 +10,7 @@ so tool writes are visible to the caller that started the run."""
 
 from __future__ import annotations
 
+import os
 import re
 import time
 from contextvars import ContextVar
@@ -30,6 +31,40 @@ from results import _auto_chart_spec
 DEFAULT_MODEL_CHOICE = "glm"
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# THE CHAT SESSION: what outlives one question
+# ═══════════════════════════════════════════════════════════════════════════
+# On 2026-10-05 the deployed agent ran the same 22 GiB query 64 times (and
+# another 19). Every repeat started a fresh question, and every guard lived
+# on the question, so each one began with a clean slate. Repeats now cost
+# nothing (Athena result reuse); the ledger, owned by the UI's chat session
+# and handed to each question's run, caps what a chat can scan.
+
+
+def session_scan_budget_bytes() -> int:
+    """Bytes a chat may scan before the user is asked to continue
+    (ATHENA_SESSION_SCAN_BUDGET_GB, default 50; 0 = no budget)."""
+    try:
+        gb = float(os.getenv("ATHENA_SESSION_SCAN_BUDGET_GB", "50"))
+    except ValueError:
+        gb = 50.0
+    return int(max(gb, 0) * 1024 ** 3)
+
+
+@dataclass
+class SessionLedger:
+    """What a chat has scanned, against its budget."""
+    bytes_scanned: int = 0
+    allowance: int = field(default_factory=session_scan_budget_bytes)
+
+    def over_budget(self) -> bool:
+        return bool(self.allowance) and self.bytes_scanned >= self.allowance
+
+    def extend(self) -> None:
+        """The user chose to continue: allow another budget's worth."""
+        self.allowance = self.bytes_scanned + session_scan_budget_bytes()
+
+
 @dataclass
 class RunContext:
     """Everything one question's run reads (inputs) and writes (results)."""
@@ -38,6 +73,9 @@ class RunContext:
     model_choice: str = DEFAULT_MODEL_CHOICE
     execute_live: bool = True
     user: str = ""                 # who asked; usage is recorded against it
+    # The chat's scan ledger. A run without one gets its own, so the budget
+    # still applies within the question.
+    session: SessionLedger = field(default_factory=SessionLedger)
     # Results, written by tools during the run
     dataframe: Optional[pd.DataFrame] = None
     query_id: Optional[str] = None
@@ -61,11 +99,13 @@ _CURRENT_RUN: ContextVar[RunContext] = ContextVar("current_run")
 
 
 def start_run(question: str = "", model_choice: str = DEFAULT_MODEL_CHOICE,
-              execute_live: bool = True, user: str = "") -> RunContext:
+              execute_live: bool = True, user: str = "",
+              session: Optional[SessionLedger] = None) -> RunContext:
     """Begin a fresh run in the current context and return it. Call once per
     question, before the agent is built or streamed."""
     ctx = RunContext(question=question, model_choice=model_choice,
-                     execute_live=execute_live, user=user)
+                     execute_live=execute_live, user=user,
+                     session=session if session is not None else SessionLedger())
     _CURRENT_RUN.set(ctx)
     return ctx
 
@@ -192,6 +232,7 @@ def record_scan(query_id: Optional[str], bytes_scanned: int, status: str,
         return
     run.scans.append({"query_id": query_id, "bytes_scanned": int(bytes_scanned or 0),
                       "status": status, "tool": tool, "workgroup": workgroup})
+    run.session.bytes_scanned += int(bytes_scanned or 0)
 
 
 def tracked_query(sql: str, tool: str, database: Optional[str] = None,
@@ -205,7 +246,8 @@ def tracked_query(sql: str, tool: str, database: Optional[str] = None,
         record_scan(e.query_id, e.bytes_scanned, e.state.lower(), tool)
         raise
     record_scan(df.attrs.get("query_id"), df.attrs.get("bytes_scanned", 0),
-                "succeeded", tool, df.attrs.get("workgroup", ""))
+                "reused" if df.attrs.get("reused") else "succeeded", tool,
+                df.attrs.get("workgroup", ""))
     return df
 
 

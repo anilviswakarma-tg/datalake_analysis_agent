@@ -10,7 +10,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 from langchain_core.tools import tool
 
 import models
-from aws import AthenaQueryError, _glue, _with_credential_retry
+from aws import (RESULT_REUSE_MINUTES, AthenaQueryError, _glue, _with_credential_retry,
+                 result_size_bytes)
 from config import DATA_DICT_DIR, VALID_DOMAINS, _known_databases
 from entities import _fuzzy_match, _load_groups, _load_musicowners
 from knowledge import (_append_feedback, _data_dict_index, _data_dict_preamble,
@@ -424,24 +425,32 @@ def sql_db_query(query: str) -> str:
         _record("sql_db_query", "⏭️ skipped (live off)")
         return ("EXECUTION SKIPPED: 'Execute against Athena' toggled off. "
                 "Return the SQL to the user without running it.")
+
+    # Repeats across questions need no guard here: Athena's result reuse
+    # (aws.RESULT_REUSE_MINUTES) returns an identical query's stored result
+    # without scanning. What still needs stopping is scanning past the
+    # chat's budget.
+    ledger = current_run().session
+    if ledger.over_budget():
+        _record("sql_db_query", "🛑 blocked: chat scan budget")
+        return (f"SCAN BUDGET REACHED - this chat has scanned "
+                f"{fmt_bytes(ledger.bytes_scanned)}, over its "
+                f"{fmt_bytes(ledger.allowance)} budget. Do not run more queries. "
+                "Tell the user what you found so far and that the chat's scan "
+                "budget is used up; they will be asked whether to continue when "
+                "they send their next message.")
+
     try:
         record_query(query)
-        df = tracked_query(query, "sql_db_query", limit_rows=100)  # preview; full data from S3
+        df = tracked_query(query, "sql_db_query", limit_rows=PREVIEW_ROWS)
         _stash_result(df)
-        preview = df.head(10).to_string(index=False, max_cols=8)[:1500]
-        _record("sql_db_query", f"✅ {len(df)} rows")
-        # Tell the agent what the user will see, so it never promises
-        # downloads that a single-value answer doesn't get.
-        shown = ("DISPLAY: a single value. The user gets NO table and NO "
-                 "download buttons for it - state the value; don't mention "
-                 "downloads." if is_scalar_result(df) else
-                 "DISPLAY: shown to the user as a table with CSV and Excel "
-                 "download buttons under your answer.")
-        return (
-            f"Query succeeded. {len(df)} rows returned "
-            f"(query_id={df.attrs.get('query_id')}).\n{shown}\n\n"
-            f"Preview (first 10 rows):\n{preview}"
-        )
+        if df.attrs.get("reused"):
+            _add_notice(f"Cached result: this exact query ran in the last "
+                        f"{RESULT_REUSE_MINUTES // 60} hours, so Athena returned that "
+                        f"result instead of reading the data again. Results are "
+                        f"reused for up to {RESULT_REUSE_MINUTES} minutes.")
+        _record("sql_db_query", f"✅ {len(df)}{'+' if df.attrs.get('truncated') else ''} rows")
+        return "Query succeeded. " + _result_summary(df)
     except AthenaQueryError as e:
         if not e.scan_cutoff:
             return _athena_error(str(e))
@@ -474,6 +483,34 @@ def _athena_error(err: str) -> str:
         hint = "\nHINT: Use list_tables(db) to confirm the table exists."
     _record("sql_db_query", f"❌ {err[:120]}")
     return f"ATHENA ERROR: {err}{hint}"
+
+
+PREVIEW_ROWS = 100     # rows loaded into the app; the full result is in S3
+
+
+def _result_summary(df: pd.DataFrame) -> str:
+    """What the agent is told about a result: its size, whether the preview
+    is partial, what the user will see, and the first rows."""
+    if df.attrs.get("truncated"):
+        size = result_size_bytes(df.attrs.get("query_id") or "")
+        rows = (f"More than {len(df)} rows: only the first {len(df)} were loaded"
+                + (f" (the full result is {fmt_bytes(size)})" if size else "") +
+                ". That is expected and complete for answering: summarise from "
+                "these rows or write an aggregate query (COUNT, GROUP BY). Never "
+                "re-run the same SQL to see more - it returns the same thing.")
+    else:
+        rows = f"{len(df)} rows returned (all of them)."
+    reused = " Reused a stored result: nothing scanned." if df.attrs.get("reused") else ""
+    # Tell the agent what the user will see, so it never promises downloads
+    # that a single-value answer doesn't get.
+    shown = ("DISPLAY: a single value. The user gets NO table and NO download "
+             "buttons for it - state the value; don't mention downloads."
+             if is_scalar_result(df) else
+             "DISPLAY: shown to the user as a table with CSV and Excel download "
+             "buttons under your answer (the full result, not just these rows).")
+    preview = df.head(10).to_string(index=False, max_cols=8)[:1500]
+    return (f"{rows}{reused} (query_id={df.attrs.get('query_id')})\n{shown}\n\n"
+            f"Preview (first 10 rows):\n{preview}")
 
 
 # ---- UX tools ----

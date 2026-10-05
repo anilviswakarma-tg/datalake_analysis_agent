@@ -20,7 +20,8 @@ from config import DATA_DICT_DIR, FEEDBACK_FILE, _openai_key_looks_real
 from entities import _ENTITY_CACHE
 from models import (_MODEL_REGISTRY, explain_failure, missing_key_reason,
                     model_label)
-from run_state import start_run
+from results import fmt_bytes
+from run_state import SessionLedger, start_run
 from ui import (_AGENTS, _clear_current_runs, _current_runs, _friendly_status,
                 _inject_css, _logo_data_uri, _render_answer, message_text)
 
@@ -277,8 +278,17 @@ def main():
 
         # Per-run context: this user's question, model and live flag, and the
         # slot the tools write results into. Never a process-wide global.
+        # One ledger per browser session: the repeat guard and scan budget
+        # must survive Streamlit re-running the script, which re-asked the
+        # same question 64 times on 2026-10-05. "Clear conversation" resets it.
+        ledger = st.session_state.setdefault("ledger", SessionLedger())
+        if ledger.over_budget():
+            st.error(f"This session has scanned {fmt_bytes(ledger.bytes_scanned)} of "
+                     f"Athena data, over its {fmt_bytes(ledger.allowance)} budget. "
+                     "Use 🗑️ Clear conversation to start again.")
+            st.stop()
         run_ctx = start_run(question=question, model_choice=model_choice,
-                            execute_live=execute_live)
+                            execute_live=execute_live, session=ledger)
 
         with st.chat_message("user"):
             st.markdown(question)
