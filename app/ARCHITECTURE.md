@@ -18,7 +18,7 @@ rule is what keeps the graph acyclic, and `tests/test_wiring.py` enforces it.
 | `aws.py` | ~200 | boto3 sessions and clients, credential retry, the Athena query executor (bytes scanned per query; stops a timed-out query), S3 result fetch. The only module that talks to AWS. |
 | `results.py` | ~80 | Chart selection, CSV/Excel export bytes. Framework-free; rendering is in the UI layer. |
 | `run_state.py` | ~200 | The per-run context (inputs + results) handed from agent tools to the UI, the loop guards, and `tracked_query`, which every Athena call goes through so its scan is recorded. |
-| `knowledge.py` | ~170 | Reading the data dictionary, `domain_rules.md` and `feedback.md`. |
+| `knowledge.py` | ~170 | Reading the data dictionary; appending the agent's findings to `feedback.md`. |
 | `entities.py` | ~90 | Resolving names ("Sony", "Etisalat") to `owner_id` / `group_id`. |
 | `models.py` | ~385 | Model registry, Bedrock Mantle SigV4 auth, content normalisers. |
 | `prompt.py` | ~165 | The agent system prompt. |
@@ -84,13 +84,15 @@ Precedence when they disagree — enforced in `prompt.py` and documented in
    there, not here. Read via `get_data_dictionary(tables)`.
 2. **AWS Glue** — authoritative on what *exists* and its type, via
    `describe_table`.
-3. **`knowledge/domain_rules.md`** — the agent playbook: mandatory filters,
-   default date ranges, SQL patterns, reporting rules. Loses to both.
-4. **`knowledge/feedback.md`** — append-only observations from the agent,
-   for human review and promotion.
 
-`knowledge/dictionary_gaps.md` tracks what `domain_rules.md` knows that the
-dictionary doesn't yet.
+Agent behaviour (date defaults, reporting rules) lives in `prompt.py`. The
+`domain_rules.md` playbook that used to sit between these was retired on
+2026-09-24; `knowledge/dictionary_gaps.md` is the historical record of that
+migration.
+
+**`knowledge/feedback.md`** is not a source: the agent appends observations
+there (`capture_finding`) and never reads them. A person reviews them and
+promotes the useful ones into the dictionary or `prompt.py`.
 
 ## The agent's tools
 

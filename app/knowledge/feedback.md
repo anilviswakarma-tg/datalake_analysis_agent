@@ -1,8 +1,10 @@
 # Agent Feedback Log
 
 > **Append-only.** The agent writes observations here while solving real
-> queries. Humans review periodically and promote useful items into
-> `domain_rules.md`.
+> queries (`capture_finding`). It never reads them back: an observation only
+> changes its behaviour once a person promotes it into the upstream data
+> dictionary (or `prompt.py`, for agent behaviour) and deletes it here. See
+> `knowledge/README.md`.
 >
 > Each entry: timestamp, domain, original question (if any), observation.
 

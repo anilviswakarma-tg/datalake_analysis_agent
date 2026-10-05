@@ -199,7 +199,9 @@ Answers to the checks above:
 - **Retention (2026-09-30).** Chats are deleted after 60 days without
   activity (`CHAT_RETENTION_DAYS`) unless the user makes them favourites
   (the title bar's Favourite button or the chat's ⋯ menu); favourites show a
-  star in the chat list. The
+  star in the chat list. Favourites are never deleted, so they are capped
+  at 20 per user (`FAVOURITES_MAX`, 2026-10-06); past that, the page says
+  to remove one first. The
   sweep runs at startup and daily. The model is sent the last 25 exchanges
   of a chat (`MAX_HISTORY`).
 
@@ -253,13 +255,31 @@ admin screen; to change one:
 python -c "import asyncio, chat_store; asyncio.run(chat_store.set_user_tier(chat_store.chat_db_url(), 'someone@tunedglobal.com', 'uncapped'))"
 ```
 
-Next: a per-user monthly limit column on `user_tiers`, checked against
-`chat_store.month_usage` before a question runs.
+**TODO: enforce a monthly spend cap for capped users.** The concern is what
+a user spends on Athena, not how much they use the agent, so there is
+deliberately no limit on questions per minute or questions running at once.
+Today nothing limits spend over time: Continue on the chat budget allows
+another 50 GB, a new chat starts a fresh 50 GB, and the only hard ceiling is
+the workgroup's 50 GB per query. Plan: a per-user monthly limit column on
+`user_tiers` (the default for capped users still to be decided), checked
+against `chat_store.month_usage` before a question runs, and again before
+each query so one question can't run far past it.
+
+**TODO: store the agent's findings in the chat database, not
+`knowledge/feedback.md`.** `capture_finding` appends to that file, which on
+the server sits on the EC2 box's `knowledge/` volume: nobody sees what's
+captured unless they look there, and a local run writes into the repo's copy
+instead. A `findings` table (time, user, chat id, domain, question,
+observation, reviewed/promoted status) would keep each finding linked to the
+chat it came from and survive redeploys, and the dev-mode `/view-feedback`
+command (Streamlit: the admin button) would read from it. Review stays
+manual: promote useful findings into the dictionary or `prompt.py`
+(`knowledge/README.md`).
 
 **TODO: set `ATHENA_WORKGROUP=datalake-agent` in the server's `.env`** (and
 `ATHENA_OUTPUT_S3` to its results location). The code defaults to it, but a
 server `.env` still saying `primary` would override that and run with no scan
-cutoff. Details and IAM needs in [DEPLOY.md](DEPLOY.md), Step 4.
+cutoff. Details and IAM needs in [DEPLOY.md](DEPLOY.md), sections 1.3 and 2.
 
 ---
 
@@ -280,9 +300,8 @@ Phase 2 rather than after it.
 | Issue | Impact | Notes |
 |---|---|---|
 | `st.components.v1.html` deprecated past its removal date | session auto-logout breaks on a future Streamlit upgrade | `st.iframe` is the replacement; resolved by Phase 2 |
-| **Mandated filters don't prune `mastermusic`** | **root cause of large scans.** One agent query on 2026-09-23 scanned 15.78 GB | `mastermusic` partitions on `owner_id_salt`/`dw_stock_type`, but the playbook pushes `owner_id` and claims it gives "partition pruning benefits" (`domain_rules.md:316`) — it doesn't. See [knowledge/dictionary_gaps.md](knowledge/dictionary_gaps.md) C1 |
+| **Mandated filters don't prune `mastermusic`** | **root cause of large scans.** One agent query on 2026-09-23 scanned 15.78 GB | `mastermusic` partitions on `owner_id_salt`/`dw_stock_type`, but the playbook pushes `owner_id` and claimed it gives "partition pruning benefits" (`domain_rules.md:316`) — it doesn't. That playbook was retired on 2026-09-24 and the dictionary doesn't repeat the claim; whether the agent still filters on `owner_id` unprompted is unverified. See [knowledge/dictionary_gaps.md](knowledge/dictionary_gaps.md) C1 |
 | **No per-query scan cutoff** | an unbounded query can scan TBs at $5/TB | **don't set this on `primary`** — it's shared with the reporting pipelines and a cutoff there could break their jobs. Give the agent its own workgroup with `BytesScannedCutoffPerQuery`, its own output location (which also scopes the lifecycle policy to agent results), and `PublishCloudWatchMetricsEnabled` on. **App side done (2026-10-05):** `ATHENA_WORKGROUP` selects it; a cutoff-stopped query tells the agent how to narrow it; every query's bytes scanned are stored per user (`query_usage`, failed queries included) and the month's total shows beside the model picker |
 | Athena results bucket has no lifecycle policy | 0.09 GB / 3,004 objects ≈ $0.002/month; largest object 8.8 MB | add 30-day expiry as hygiene. Phase 1 is designed not to depend on retention |
 | Entity cache is in-memory, 15-min TTL | lost on restart | harmless, rebuilds on demand |
-| `domain_rules.md` self-contradiction and dictionary gaps | agent may follow stale rules | tracked in [knowledge/dictionary_gaps.md](knowledge/dictionary_gaps.md) |
 | Local dev can't reach Bedrock | can't test against GLM-5, the production model | needs `bedrock-mantle:CreateInference` on the dev IAM user |
