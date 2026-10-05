@@ -18,12 +18,12 @@ import models
 from models import (ContentNormalizer, GeminiNormalizer,  # noqa: F401
                     PassthroughNormalizer, active_normalizer, message_text,
                     normalizer_for)
-from aws import _fetch_s3_csv
+from aws import _fetch_s3_csv, result_size_bytes
 from catalogue import AGENT_KEYS, AGENTS
 from config import LOGO_FILE, SCRIPT_DIR
 from tools import friendly_status as _friendly_status  # noqa: F401
-from results import (chart_frame, df_to_csv_bytes, df_to_excel_bytes,
-                     is_scalar_result)
+from results import (chart_frame, df_to_csv_bytes, df_to_excel_bytes, download_formats,
+                     fmt_bytes, is_scalar_result)
 
 
 
@@ -155,51 +155,69 @@ def _render_answer(run: dict, i: int, dev: bool) -> None:
 
     query_id = run.get("query_id", "n/a")
     s3_base = os.getenv("ATHENA_OUTPUT_S3", "")
+    if is_single_row:              # no table, so no downloads
+        return
 
-    # Fetch full S3 result once per query and cache it
+    # The full result's size and CSV, fetched once per query and kept: this
+    # runs again for every past answer on each rerun. Too large a result gets
+    # no downloads, or no Excel (results.download_formats).
     _s3_key = f"_s3_{query_id}"
     if _s3_key not in st.session_state and query_id != "n/a":
-        st.session_state[_s3_key] = _fetch_s3_csv(query_id)
-    s3_csv: bytes = st.session_state.get(_s3_key, b"")
+        size = result_size_bytes(query_id)
+        st.session_state[_s3_key] = {
+            "size": size,
+            "csv": _fetch_s3_csv(query_id) if download_formats(size) else b""}
+    cached = st.session_state.get(_s3_key) or {"size": None, "csv": b""}
+    size, s3_csv = cached["size"], cached["csv"]
+    formats = download_formats(size)
+
+    if not formats:
+        st.caption(f"⚠️ Showing the first {len(df):,} rows. The full result is "
+                   f"{fmt_bytes(size)}, too large to download here: narrow the "
+                   "question to download it.")
+        if dev:
+            st.caption(f"query id `{query_id}`")
+        return
 
     # Total row count from S3 line count (no re-parse needed)
     total_rows = max(s3_csv.count(b"\n") - 1, len(df)) if s3_csv else len(df)
-
-    # Only show download buttons for multi-row results
-    if not is_single_row:
-        if total_rows > len(df):
-            st.caption(
-                f"⚠️ Showing first {len(df):,} of {total_rows:,} rows — "
-                "CSV and Excel contain the full dataset."
-            )
-        if dev:
-            st.caption(
-                f"{total_rows:,} rows · query id `{query_id}`"
-                + (f" · 📁 `{s3_base}{query_id}.csv`" if s3_base and query_id != "n/a" else "")
-            )
-        else:
-            st.caption(f"{total_rows:,} rows")
-        c1, c2 = st.columns(2)
-        with c1:
-            csv_data = s3_csv if s3_csv else df_to_csv_bytes(df)
-            st.download_button(
-                "⬇️ CSV", csv_data,
-                file_name=f"datalake_{query_id}.csv",
-                mime="text/csv", key=f"csv_{i}",
-                use_container_width=True,
-            )
-        with c2:
-            if s3_csv:
-                try:
-                    xl_data = df_to_excel_bytes(pd.read_csv(io.BytesIO(s3_csv)))
-                except Exception:
-                    xl_data = df_to_excel_bytes(df)
-            else:
-                xl_data = df_to_excel_bytes(df)
-            st.download_button(
-                "⬇️ Excel", xl_data,
-                file_name=f"datalake_{query_id}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"xlsx_{i}",
-                use_container_width=True,
-            )
+    if total_rows > len(df):
+        st.caption(
+            f"⚠️ Showing first {len(df):,} of {total_rows:,} rows — "
+            + ("CSV and Excel contain" if "excel" in formats
+               else f"the CSV ({fmt_bytes(size)}; too large for Excel) contains")
+            + " the full dataset."
+        )
+    if dev:
+        st.caption(
+            f"{total_rows:,} rows · query id `{query_id}`"
+            + (f" · 📁 `{s3_base}{query_id}.csv`" if s3_base and query_id != "n/a" else "")
+        )
+    else:
+        st.caption(f"{total_rows:,} rows")
+    c1, c2 = st.columns(2)
+    with c1:
+        csv_data = s3_csv if s3_csv else df_to_csv_bytes(df)
+        st.download_button(
+            "⬇️ CSV", csv_data,
+            file_name=f"datalake_{query_id}.csv",
+            mime="text/csv", key=f"csv_{i}",
+            use_container_width=True,
+        )
+    if "excel" not in formats:
+        return
+    with c2:
+        _xl_key = f"_xlsx_{query_id}"
+        if _xl_key not in st.session_state:
+            try:
+                st.session_state[_xl_key] = df_to_excel_bytes(
+                    pd.read_csv(io.BytesIO(s3_csv)) if s3_csv else df)
+            except Exception:
+                st.session_state[_xl_key] = df_to_excel_bytes(df)
+        st.download_button(
+            "⬇️ Excel", st.session_state[_xl_key],
+            file_name=f"datalake_{query_id}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"xlsx_{i}",
+            use_container_width=True,
+        )

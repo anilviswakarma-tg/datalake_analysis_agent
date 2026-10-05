@@ -235,6 +235,13 @@ gaps found in that test are fixed (`tests/test_reconnect.py`): an answer
 finished while the browser was away is now shown by reloading the chat once
 it is back, and the scan budget is kept by chat id, so a reconnect or
 reload no longer resets it.
+Same day, an answer never appeared: its query returned an 8 GB result,
+which the app was downloading into memory to build the CSV and Excel
+buttons. Downloads now stop at `DOWNLOAD_MAX_MB` (100) and Excel at 10 MB,
+the agent is told which it gets, and a failure building them no longer
+loses the answer (`tests/test_downloads.py`). The query itself copied the
+nested `rights` column into every row; the agent is now told to select only
+the columns asked for.
 **The deployed agent has none of this until it is redeployed.** Check the
 server's proxy/load balancer idle timeout too.
 

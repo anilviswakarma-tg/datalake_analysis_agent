@@ -4,7 +4,8 @@ CSV/Excel export bytes. Framework-free; rendering lives in the UI layer."""
 from __future__ import annotations
 
 import io
-from typing import Dict, Optional
+import os
+from typing import Dict, Optional, Tuple
 
 import pandas as pd
 
@@ -62,6 +63,28 @@ def _auto_chart_spec(df: pd.DataFrame) -> Optional[Dict[str, str]]:
 CHART_TYPES = ("bar", "line", "pie", "scatter", "area")
 # Tuned Global orange first; pie slices cycle through the rest.
 CHART_COLORS = ["#E85420", "#F0A07F", "#8C8C8C", "#C8C8C8", "#5A5A5A", "#B8401A"]
+
+
+# Downloads are built in the app's memory from the full result CSV in S3, so
+# a result over DOWNLOAD_MAX_MB gets none (an 8 GB result once stalled the
+# answer while it downloaded). Excel is slower still - about 24 s for a
+# 16 MB, 200,000-row result, all before the answer appears - so it stops
+# sooner. Both sizes are of the result CSV, as S3 reports it.
+EXCEL_MAX_BYTES = 10 * 1024 ** 2
+
+
+def download_max_bytes() -> int:
+    return int(float(os.getenv("DOWNLOAD_MAX_MB", "100")) * 1024 ** 2)
+
+
+def download_formats(size: Optional[int]) -> Tuple[str, ...]:
+    """The downloads a result whose CSV is `size` bytes gets. None (size
+    unknown) means the downloads are built from the in-app preview."""
+    if size is None or size <= EXCEL_MAX_BYTES:
+        return ("csv", "excel")
+    if size <= download_max_bytes():
+        return ("csv",)
+    return ()
 
 
 def fmt_bytes(n: float) -> str:

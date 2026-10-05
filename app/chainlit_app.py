@@ -35,13 +35,13 @@ from fastapi.responses import JSONResponse
 import access
 import chat_store
 from agent import build_agent
-from aws import RESULT_REUSE_MINUTES, _fetch_s3_csv
+from aws import RESULT_REUSE_MINUTES, _fetch_s3_csv, result_size_bytes
 from chainlit_data import build_data_layer
 from config import DATA_DICT_DIR, FEEDBACK_FILE, _openai_key_looks_real
 from entities import _ENTITY_CACHE
 from models import (_MODEL_REGISTRY, explain_failure, message_text,
                     missing_key_reason, model_label)
-from results import (df_to_csv_bytes, df_to_excel_bytes, fmt_bytes,
+from results import (df_to_csv_bytes, df_to_excel_bytes, download_formats, fmt_bytes,
                      is_scalar_result, plotly_figure)
 from run_state import DEFAULT_MODEL_CHOICE, SessionLedger, start_run
 from tools import friendly_status
@@ -312,8 +312,12 @@ async def on_chat_resume(thread: Dict[str, Any]):
         df = chat_store.preview_dataframe(result)
         if df is None:
             continue
-        elements, _captions = await _result_parts(df, result.get("query_id"),
-                                                  result.get("chart"), dev=_dev_mode())
+        try:
+            elements, _captions = await _result_parts(df, result.get("query_id"),
+                                                      result.get("chart"), dev=_dev_mode())
+        except Exception:        # the chat still opens, without this table
+            log.exception("could not rebuild a result for chat %s", thread.get("id"))
+            continue
         await _attach_to_resumed_thread(thread, step_id, elements)
 
 
@@ -603,6 +607,17 @@ async def _result_parts(df: Optional[pd.DataFrame], query_id: Optional[str],
 
     elements.append(cl.Dataframe(name="Results", data=df, display="inline"))
 
+    # Too large a result gets no downloads, or no Excel (results.download_formats)
+    size = await cl.make_async(result_size_bytes)(query_id) if query_id else None
+    formats = download_formats(size)
+    if not formats:
+        captions.append(f"⚠️ Showing the first {len(df):,} rows. The full result is "
+                        f"{fmt_bytes(size)}, too large to download here: narrow the "
+                        "question to download it.")
+        if dev and query_id:
+            captions.append(f"query id `{query_id}`")
+        return elements, captions
+
     s3_csv: bytes = await cl.make_async(_fetch_s3_csv)(query_id) if query_id else b""
     total_rows = max(s3_csv.count(b"\n") - 1, len(df)) if s3_csv else len(df)
 
@@ -617,14 +632,17 @@ async def _result_parts(df: Optional[pd.DataFrame], query_id: Optional[str],
     stem = f"datalake_{query_id or 'results'}"
     elements.append(cl.File(name=f"{stem}.csv", content=s3_csv or df_to_csv_bytes(df),
                             mime="text/csv", display="inline"))
-    elements.append(cl.File(
-        name=f"{stem}.xlsx", content=await cl.make_async(excel_bytes)(),
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        display="inline"))
+    if "excel" in formats:
+        elements.append(cl.File(
+            name=f"{stem}.xlsx", content=await cl.make_async(excel_bytes)(),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            display="inline"))
 
     if total_rows > len(df):
         captions.append(f"⚠️ Showing first {len(df):,} of {total_rows:,} rows - "
-                        "CSV and Excel contain the full dataset.")
+                        + ("CSV and Excel contain" if "excel" in formats
+                           else f"the CSV ({fmt_bytes(size)}; too large for Excel) contains")
+                        + " the full dataset.")
     if dev and query_id:
         s3_base = os.getenv("ATHENA_OUTPUT_S3", "")
         captions.append(f"{total_rows:,} rows · query id `{query_id}`"
@@ -708,7 +726,11 @@ async def _answer(message: cl.Message) -> Optional[cl.Message]:
         # A failed run's queries were billed too
         await _save_usage(ctx.user, ctx.scans)
 
-    elements, captions = await _result_parts(ctx.dataframe, ctx.query_id, ctx.chart, dev)
+    try:
+        elements, captions = await _result_parts(ctx.dataframe, ctx.query_id, ctx.chart, dev)
+    except Exception:            # the answer text still goes out, and is saved
+        log.exception("could not build the result table and downloads")
+        elements, captions = [], ["⚠️ The result table and downloads couldn't be prepared."]
     if dev and ctx.scans:
         captions.append(f"Athena scanned {fmt_bytes(ctx.bytes_scanned)} across "
                         f"{len(ctx.scans)} quer{'y' if len(ctx.scans) == 1 else 'ies'}")

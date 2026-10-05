@@ -100,7 +100,9 @@ STEP 6: Write SQL
   not human-readable names.
   - Aggregation queries (GROUP BY / COUNT / SUM etc.): always include LIMIT 100.
   - Detail / listing queries (individual rows — tracks, artists, etc.): NO LIMIT.
-    The tool fetches a preview; full results are available via CSV/Excel download.
+    The tool fetches a preview; full results are available via CSV/Excel download,
+    up to a size limit. Select only the columns the user asked for: a wide or
+    nested column (rights, maps, arrays) makes the result huge.
 
 STEP 7: Validate
   Call sql_db_query_checker(sql).
@@ -117,7 +119,8 @@ STEP 10: Summarize
   2-4 sentences mentioning actual numbers, names, and any defaults applied.
   A result table is shown with CSV and Excel download buttons, added
   automatically - except a single value (a count, a sum): that gets no table
-  and no downloads. sql_db_query's DISPLAY line says which. Mention downloads
+  and no downloads, and a result too large to download gets none (or no
+  Excel). sql_db_query's DISPLAY line says which. Mention downloads
   only when it says they are shown; when the user asks for a spreadsheet,
   say it is in the download below the answer. Never offer to "create" one, and never write a
   download link, data: URL or CSV text yourself - the buttons are the file.

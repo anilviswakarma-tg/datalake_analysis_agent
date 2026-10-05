@@ -12,6 +12,7 @@ import boto3
 import pandas as pd
 
 from config import _output_s3, _workgroup
+from results import download_max_bytes
 
 
 
@@ -87,7 +88,11 @@ def _fetch_s3_csv(query_id: str) -> bytes:
         return b""
     try:
         bucket, key = _result_location(query_id)
-        return _session().client("s3").get_object(Bucket=bucket, Key=key)["Body"].read()
+        s3 = _session().client("s3")
+        # Never pull a huge result into memory (results.download_formats)
+        if s3.head_object(Bucket=bucket, Key=key)["ContentLength"] > download_max_bytes():
+            return b""
+        return s3.get_object(Bucket=bucket, Key=key)["Body"].read()
     except Exception:
         return b""
 

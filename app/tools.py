@@ -16,7 +16,7 @@ from config import DATA_DICT_DIR, VALID_DOMAINS, _known_databases
 from entities import _fuzzy_match, _load_groups, _load_musicowners
 from knowledge import (_append_feedback, _data_dict_index, _data_dict_preamble,
                        _normalise_table_name)
-from results import CHART_TYPES, fmt_bytes, is_scalar_result
+from results import CHART_TYPES, download_formats, fmt_bytes, is_scalar_result
 from run_state import (_add_notice, _record, _stash_result, check_query_allowed,
                        current_run, record_query, tracked_query)
 
@@ -491,8 +491,8 @@ PREVIEW_ROWS = 100     # rows loaded into the app; the full result is in S3
 def _result_summary(df: pd.DataFrame) -> str:
     """What the agent is told about a result: its size, whether the preview
     is partial, what the user will see, and the first rows."""
+    size = result_size_bytes(df.attrs.get("query_id") or "") if df.attrs.get("truncated") else None
     if df.attrs.get("truncated"):
-        size = result_size_bytes(df.attrs.get("query_id") or "")
         rows = (f"More than {len(df)} rows: only the first {len(df)} were loaded"
                 + (f" (the full result is {fmt_bytes(size)})" if size else "") +
                 ". That is expected and complete for answering: summarise from "
@@ -501,16 +501,33 @@ def _result_summary(df: pd.DataFrame) -> str:
     else:
         rows = f"{len(df)} rows returned (all of them)."
     reused = " Reused a stored result: nothing scanned." if df.attrs.get("reused") else ""
-    # Tell the agent what the user will see, so it never promises downloads
-    # that a single-value answer doesn't get.
-    shown = ("DISPLAY: a single value. The user gets NO table and NO download "
-             "buttons for it - state the value; don't mention downloads."
-             if is_scalar_result(df) else
-             "DISPLAY: shown to the user as a table with CSV and Excel download "
-             "buttons under your answer (the full result, not just these rows).")
-    preview = df.head(10).to_string(index=False, max_cols=8)[:1500]
-    return (f"{rows}{reused} (query_id={df.attrs.get('query_id')})\n{shown}\n\n"
-            f"Preview (first 10 rows):\n{preview}")
+    return (f"{rows}{reused} (query_id={df.attrs.get('query_id')})\n{_display_line(df, size)}\n\n"
+            f"Preview (first 10 rows):\n{_preview(df)}")
+
+
+def _display_line(df: pd.DataFrame, size) -> str:
+    """What the user will see under the answer, so the agent never promises
+    downloads that aren't there (results.download_formats)."""
+    if is_scalar_result(df):
+        return ("DISPLAY: a single value. The user gets NO table and NO download "
+                "buttons for it - state the value; don't mention downloads.")
+    formats = download_formats(size)
+    if formats == ("csv", "excel"):
+        return ("DISPLAY: shown to the user as a table with CSV and Excel download "
+                "buttons under your answer (the full result, not just these rows).")
+    if formats == ("csv",):
+        return ("DISPLAY: shown to the user as a table with a CSV download button "
+                "under your answer (the full result). NO Excel download: the result "
+                "is too large for one, so don't offer Excel.")
+    return (f"DISPLAY: shown to the user as a table of the first {len(df)} rows only. "
+            f"The full result ({fmt_bytes(size)}) is too large to download, so there "
+            "are NO download buttons - don't mention or link a download. Tell the "
+            "user it is too large to download and suggest narrowing the question "
+            "(filters, fewer columns, or an aggregate).")
+
+
+def _preview(df: pd.DataFrame) -> str:
+    return df.head(10).to_string(index=False, max_cols=8)[:1500]
 
 
 # ---- UX tools ----
