@@ -249,7 +249,7 @@ def test_the_favourites_cap_is_reported_not_raised(cl_app, monkeypatch):
     async def at_cap(*a):
         raise cl_app.chat_store.FavouriteLimitReached(20)
     monkeypatch.setattr(cl_app, "is_thread_author", owner)
-    monkeypatch.setattr(cl_app.chat_store, "set_favourite", at_cap)
+    monkeypatch.setattr(cl_app, "STORE", SimpleNamespace(set_favourite=at_cap))
     response = asyncio.run(cl_app.set_favourite_chat(
         "t1", {"favourite": True}, SimpleNamespace(identifier="a@tunedglobal.com")))
     assert response.status_code == 409

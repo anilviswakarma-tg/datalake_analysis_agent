@@ -1,10 +1,17 @@
 """Put the app directory on sys.path so tests import the modules directly,
 matching how Streamlit runs them (app.py's own directory is the import root).
 """
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+# Before config loads .env (load_dotenv never overrides): the suite always
+# starts on the SQL store, whichever store a developer's .env selects, so no
+# test reaches DynamoDB unless it builds a store itself
+# (tests/test_chat_store_dynamo.py).
+os.environ["CHAT_STORE"] = "sql"
 
 import pytest
 

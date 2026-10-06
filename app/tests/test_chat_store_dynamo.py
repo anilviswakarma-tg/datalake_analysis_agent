@@ -442,3 +442,20 @@ def test_stores_import_their_data_layers_while_the_app_loads():
     app; an import made later, when it asks for the data layer, fails."""
     for cls in (storage.SqlStore, dyn.DynamoStore):
         assert "import" not in inspect.getsource(cls.data_layer), cls.__name__
+
+
+@pytest.mark.parametrize("in_container,explicit,expected", [
+    (True, None, "datalake-agent-chat"),
+    (False, None, "test-datalake-agent-chat"),
+    (False, "datalake-agent-chat", "datalake-agent-chat"),     # on purpose, by name
+    (True, "other-table", "other-table"),
+])
+def test_only_the_server_defaults_to_the_production_table(monkeypatch, in_container, explicit, expected):
+    """A local run with real AWS credentials and no DYNAMODB_ENDPOINT_URL
+    must not write into production unless it names the table."""
+    monkeypatch.setattr(dyn.access, "in_container", lambda: in_container)
+    if explicit:
+        monkeypatch.setenv("DYNAMODB_TABLE", explicit)
+    else:
+        monkeypatch.delenv("DYNAMODB_TABLE", raising=False)
+    assert dyn.table_name() == expected

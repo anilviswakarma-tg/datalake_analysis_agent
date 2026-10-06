@@ -33,16 +33,25 @@ from typing import Any, Dict, List, Optional, Set
 
 from botocore.exceptions import ClientError
 
+import access
 import chat_store
 from chat_store import CAPPED, TIERS, FavouriteLimitReached
 
-DEFAULT_TABLE = "datalake-agent-chat"
+PROD_TABLE = "datalake-agent-chat"          # on the server
+LOCAL_TABLE = "test-datalake-agent-chat"    # everywhere else
 USER_THREAD_INDEX = "UserThread"       # Chainlit's name; its layer queries it
 TTL_ATTRIBUTE = "expiresAt"
 
 
 def table_name() -> str:
-    return os.getenv("DYNAMODB_TABLE", "").strip() or DEFAULT_TABLE
+    """DYNAMODB_TABLE if set. Otherwise the production table only inside the
+    server's container (access.in_container), and a test table anywhere
+    else, so a local run with real AWS credentials and no
+    DYNAMODB_ENDPOINT_URL can't write into production by accident."""
+    explicit = os.getenv("DYNAMODB_TABLE", "").strip()
+    if explicit:
+        return explicit
+    return PROD_TABLE if access.in_container() else LOCAL_TABLE
 
 
 def endpoint_url() -> Optional[str]:
