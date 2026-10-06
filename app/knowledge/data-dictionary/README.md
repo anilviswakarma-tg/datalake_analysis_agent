@@ -65,8 +65,9 @@ Two different things are both called "the catalogue":
   `musicowners`, `disambiguation_v1`. A question that names a store needs a
   table with `group_id`.
 - **A store carries a track per country (ISO code) or worldwide (`WW`):** a
-  country question is `country IN ('<code>', 'WW')`, and tracks are counted
-  with `COUNT(DISTINCT track_id)`. See [track_active.md](track_active.md).
+  worldwide track has only its `WW` row, so a country question groups by
+  `country`, with `WW` as its own row. Count tracks with
+  `COUNT(DISTINCT track_id)`. See [track_active.md](track_active.md).
 
 ## Rules that apply across every table here
 

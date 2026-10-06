@@ -6,6 +6,8 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
+import pycountry
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -276,15 +278,84 @@ def stock_codes_in(question: str) -> list:
     return list(dict.fromkeys(_STOCK_CODE.findall(question or "")))
 
 
+# Country names, lower case -> ISO code. Short forms people type, matched
+# case-sensitively so "us" the pronoun isn't the United States.
+_COUNTRY_ALIASES = {"america": "US", "united states": "US", "britain": "GB",
+                    "great britain": "GB", "england": "GB", "emirates": "AE",
+                    "saudi": "SA", "holland": "NL", "south korea": "KR",
+                    "russia": "RU", "vietnam": "VN", "iran": "IR", "syria": "SY"}
+_COUNTRY_ABBREVIATIONS = {"US": "US", "USA": "US", "UK": "GB", "UAE": "AE", "KSA": "SA"}
+
+
+def _country_names() -> dict:
+    names = dict(_COUNTRY_ALIASES)
+    for c in pycountry.countries:
+        for attr in ("name", "common_name", "official_name"):
+            if getattr(c, attr, None):
+                names.setdefault(getattr(c, attr).lower(), c.alpha_2)
+    return names
+
+
+_COUNTRY_NAMES = _country_names()
+# Longest first, so "Papua New Guinea" wins over "Guinea"
+_COUNTRY_NAME_RE = re.compile(r"\b(" + "|".join(
+    re.escape(n) for n in sorted(_COUNTRY_NAMES, key=len, reverse=True)) + r")\b")
+_COUNTRY_ABBREVIATION_RE = re.compile(r"\b(" + "|".join(_COUNTRY_ABBREVIATIONS) + r")\b")
+
+
+def countries_in(question: str) -> list:
+    """(name as typed, ISO code) for each country the question names, in
+    order, one per code."""
+    q = question or ""
+    found = [(m.start(), q[m.start():m.end()], _COUNTRY_NAMES[m.group(1)])
+             for m in _COUNTRY_NAME_RE.finditer(q.lower())]
+    found += [(m.start(), m.group(1), _COUNTRY_ABBREVIATIONS[m.group(1)])
+              for m in _COUNTRY_ABBREVIATION_RE.finditer(q)]
+    seen, out = set(), []
+    for _, name, code in sorted(found):
+        if code not in seen:
+            seen.add(code)
+            out.append((name, code))
+    return out
+
+
+def _country_hint(countries: list) -> str:
+    listed = ", ".join(f"{name} ({code})" for name, code in countries)
+    codes = ", ".join(f"'{code}'" for _, code in countries)
+    several = len(countries) > 1
+    return f"""
+
+═══ THIS QUESTION: {"COUNTRIES" if several else "A COUNTRY"} ═══
+
+The question names {"these countries" if several else "a country"}: {listed}.
+
+A country is NOT a store: never resolve_client it (unless it is part of a
+store's name, e.g. "Mobi Saudi Arabia"). For a store's catalogue it filters
+"tg-deltalake-bronze".track_active.country, which holds ISO codes plus 'WW'
+(worldwide). A worldwide track has ONLY its 'WW' row and is carried in every
+country. So don't ask the user about worldwide tracks; give the count per
+country with 'WW' as its own row:
+  WHERE country IN ({codes}, 'WW') ... GROUP BY country,
+  COUNT(DISTINCT track_id)
+Report every row, the 'WW' one as "worldwide (carried in every country)", and
+say a country with no row of its own has 0. 'WW' plus one country adds up to
+that country's full catalogue{"; different countries' rows overlap, so never add them together" if several else ""}.
+"""
+
+
 def question_hints(question: str) -> str:
     """Extra system-prompt text for this question, or ''."""
+    hints = ""
+    countries = countries_in(question)
+    if countries:
+        hints += _country_hint(countries)
     codes = stock_codes_in(question)
     if not codes:
-        return ""
+        return hints
     listed = codes[:_MAX_LISTED_CODES]
     more = (f" (and {len(codes) - len(listed)} more in the question)"
             if len(codes) > len(listed) else "")
-    return f"""
+    return hints + f"""
 
 ═══ THIS QUESTION: STOCK CODES ═══
 

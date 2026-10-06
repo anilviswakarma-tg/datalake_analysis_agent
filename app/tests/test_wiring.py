@@ -428,6 +428,19 @@ def test_stock_codes_are_recognised_in_the_question():
     assert prompt.question_hints("How many tracks does Sony have?") == ""
 
 
+def test_countries_are_recognised_in_the_question():
+    """GPT-4o mini took "Saudi Arabia" for a store and counted ETEG's tracks
+    across every country as its US count (2026-10-06)."""
+    import prompt
+    q = "Etisalat tracks in Egypt, the UAE and KSA? Not Papua New Guinea; tell us"
+    assert prompt.countries_in(q) == [("Egypt", "EG"), ("UAE", "AE"), ("KSA", "SA"),
+                                      ("Papua New Guinea", "PG")]
+    hint = prompt.question_hints("How many tracks does Etisalat have for the US?")
+    assert "country IN ('US', 'WW')" in hint and "GROUP BY country" in hint
+    assert "never add them" not in hint            # one country: nothing to add
+    assert "never add them" in prompt.question_hints("Egypt and Saudi Arabia")
+
+
 def test_the_agent_gets_the_hint_for_its_own_question():
     import inspect
     import agent
@@ -480,7 +493,7 @@ def test_the_agent_is_told_central_catalogue_from_store_data():
     section = preamble.split("## The central catalogue and a store's data")[1].split("\n## ")[0]
     assert "Any table with a `group_id` column holds store (client) data" in section
     assert "COUNT(DISTINCT track_id)" in section
-    assert "country IN ('<code>', 'WW')" in section
+    assert "groups by\n  `country`, with `WW` as its own row" in section
     assert "Describe data only" not in preamble   # for editors, not the agent
 
 
@@ -500,13 +513,15 @@ def test_the_group_id_split_matches_the_documented_tables():
     assert documented == named, documented ^ named
 
 
-def test_country_questions_include_worldwide_tracks():
-    """A worldwide track has only a WW row (all 28.9M of them, 2026-10-06),
-    so country = 'AE' alone missed 7.1M of ETEG's tracks. UPSTREAM_PENDING 13."""
+def test_country_questions_group_worldwide_tracks_separately():
+    """A worldwide track has only a WW row (all 28.9M of them, 2026-10-06):
+    ETEG's US count is all WW, Egypt's is 31.5M + 7.1M WW. Grouping by
+    country shows both without asking the user. UPSTREAM_PENDING 13."""
     from config import DATA_DICT_DIR
     from knowledge import _data_dict_preamble
-    assert "country IN ('<code>', 'WW')" in _data_dict_preamble()
+    assert "with `WW` as its own row" in _data_dict_preamble()
     track_active = (DATA_DICT_DIR / "track_active.md").read_text(encoding="utf-8")
     assert "A worldwide track has only its `WW` row" in track_active
-    assert "ta.country IN ('<code>', 'WW')" in track_active
+    assert "group by `country`" in track_active
+    assert "ask the user" not in track_active
     assert "ISO 3166 two-letter country codes" in (DATA_DICT_DIR / "mastermusic.md").read_text(encoding="utf-8")

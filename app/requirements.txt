@@ -38,6 +38,9 @@ numpy>=1.24.0
 # Excel export
 openpyxl>=3.1.0
 
+# Country names in a question -> ISO codes (prompt.question_hints)
+pycountry>=24.6.1
+
 # Charts (Altair for Streamlit, Plotly for Chainlit)
 altair>=5.0.0
 plotly>=5.20.0

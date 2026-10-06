@@ -318,3 +318,4 @@ Phase 2 rather than after it.
 | Athena results bucket has no lifecycle policy | 0.09 GB / 3,004 objects ≈ $0.002/month; largest object 8.8 MB | add 30-day expiry as hygiene. Phase 1 is designed not to depend on retention |
 | Entity cache is in-memory, 15-min TTL | lost on restart | harmless, rebuilds on demand |
 | Local dev can't reach Bedrock | can't test against GLM-5, the production model | needs `bedrock-mantle:CreateInference` on the dev IAM user |
+| **GPT-4o mini gets country questions wrong** | counts every country as one country's, or takes a country for a store | the dictionary and a country hint say what to do; it ignores them about half the time. Pending live tests in [tests/test_agent_answers.py](tests/test_agent_answers.py) (skipped unless `AGENT_LIVE_TESTS=1`); re-run on a larger model |

@@ -33,9 +33,9 @@ file when it is empty.
 13. **Country codes documented** (in `track_active.md` `country`, with the
     SPLH 693,602 rows / 261,205 tracks example, and `mastermusic.md`
     `rights`; the README only points there): upper-case ISO 3166 two-letter codes plus `WW`
-    (worldwide), `AN` and `XK`; a worldwide track has only its `WW` row, so a
-    country question is `country IN ('<code>', 'WW')` (ETEG: 7.1M worldwide
-    tracks); two free-text `rights` keys flagged as data errors. Checked
+    (worldwide), `AN` and `XK`; a worldwide track has only its `WW` row, so
+    a country question groups by `country` with `WW` as its own row (ETEG:
+    7.1M worldwide tracks, and none licensed for the US alone); two free-text `rights` keys flagged as data errors. Checked
     2026-10-06 against all 1.24B `track_active` rows and every active
     track's `rights`.
 
