@@ -30,7 +30,7 @@ def test_no_import_cycles():
 
 EXPECTED_TOOLS = {
     "get_data_dictionary", "capture_finding",
-    "list_databases", "list_tables", "describe_table", "count_rows",
+    "list_databases", "list_tables", "describe_table",
     "resolve_label", "resolve_client", "sql_db_query_checker", "sql_db_query",
     "visualize_results", "note_default_applied",
 }
@@ -43,6 +43,17 @@ def test_every_tool_is_registered_on_the_agent():
     src = inspect.getsource(agent.build_agent)
     missing = {t for t in EXPECTED_TOOLS if t not in src}
     assert not missing, f"tools defined but not registered: {sorted(missing)}"
+
+
+def test_count_rows_is_not_a_tool():
+    """count_rows could only COUNT(*): it gave ETEG's rows across every
+    country (52.8M) as its UAE track count, 14.2M (2026-10-06). Counts go
+    through sql_db_query, which can COUNT(DISTINCT track_id)."""
+    import agent
+    import inspect
+    import tools
+    assert "count_rows" not in inspect.getsource(agent)
+    assert not hasattr(tools, "count_rows")
 
 
 def test_sql_checker_uses_the_selected_model():
@@ -459,3 +470,43 @@ def test_the_agent_is_taught_to_find_video_streams():
     assert "Never filter on it to find video" in streams
     catalogue = (DATA_DICT_DIR / "mastermusic.md").read_text(encoding="utf-8")
     assert "| `content_type` |" in catalogue
+
+
+def test_the_agent_is_told_central_catalogue_from_store_data():
+    """Sent with every dictionary lookup (the README from Shared vocabulary
+    on). A local edit (UPSTREAM_PENDING item 12); a refresh would drop it."""
+    from knowledge import _data_dict_preamble
+    preamble = _data_dict_preamble()
+    section = preamble.split("## The central catalogue and a store's data")[1].split("\n## ")[0]
+    assert "Any table with a `group_id` column holds store (client) data" in section
+    assert "COUNT(DISTINCT track_id)" in section
+    assert "country IN ('<code>', 'WW')" in section
+    assert "Describe data only" not in preamble   # for editors, not the agent
+
+
+def test_the_group_id_split_matches_the_documented_tables():
+    """Every table the dictionary documents is named on one side of the
+    group_id rule, so a new table can't be left out silently."""
+    import re
+    from config import DATA_DICT_DIR
+    readme = (DATA_DICT_DIR / "README.md").read_text(encoding="utf-8")
+    index = readme.split("## Tables")[1].split("**Not started:**")[0]
+    documented = {t for row in index.splitlines()[3:] if row.startswith("|")
+                  for t in re.findall(r"`([a-z_0-9]+)`", row.split("|")[1])}
+    documented -= {"package_cost", "package_cost_text"}   # not queried directly
+    section = readme.split("## The central catalogue and a store's data")[1].split("\n## ")[0]
+    rule = section.split("Any table with a `group_id` column")[1].split("A question that names a store")[0]
+    named = set(re.findall(r"`([a-z_0-9]+)`", rule)) - {"group_id"}
+    assert documented == named, documented ^ named
+
+
+def test_country_questions_include_worldwide_tracks():
+    """A worldwide track has only a WW row (all 28.9M of them, 2026-10-06),
+    so country = 'AE' alone missed 7.1M of ETEG's tracks. UPSTREAM_PENDING 13."""
+    from config import DATA_DICT_DIR
+    from knowledge import _data_dict_preamble
+    assert "country IN ('<code>', 'WW')" in _data_dict_preamble()
+    track_active = (DATA_DICT_DIR / "track_active.md").read_text(encoding="utf-8")
+    assert "A worldwide track has only its `WW` row" in track_active
+    assert "ta.country IN ('<code>', 'WW')" in track_active
+    assert "ISO 3166 two-letter country codes" in (DATA_DICT_DIR / "mastermusic.md").read_text(encoding="utf-8")

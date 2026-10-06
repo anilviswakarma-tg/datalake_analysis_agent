@@ -18,6 +18,27 @@ done
 Once a change is merged upstream and re-vendored, delete its entry. Delete this
 file when it is empty.
 
+## `README.md`
+
+12. **New section: "The central catalogue and a store's data"** — central
+    catalogue (`mastermusic`) vs a store's catalogue (`track_active`, per
+    country); store = client = group = platform, always `group_id`; any table
+    with a `group_id` column is store data, one without is central (checked
+    against Glue for every documented table, 2026-10-06); a one-line pointer
+    to `track_active.md` for country codes and `COUNT(DISTINCT track_id)`. In
+    the shared part, so the agent receives it with every dictionary lookup.
+    Not upstream at all. Also: the "Describe data only" rule moved up into a
+    new "Editing this dictionary" section, above Shared vocabulary, so the
+    agent no longer receives it (it is for editors).
+13. **Country codes documented** (in `track_active.md` `country`, with the
+    SPLH 693,602 rows / 261,205 tracks example, and `mastermusic.md`
+    `rights`; the README only points there): upper-case ISO 3166 two-letter codes plus `WW`
+    (worldwide), `AN` and `XK`; a worldwide track has only its `WW` row, so a
+    country question is `country IN ('<code>', 'WW')` (ETEG: 7.1M worldwide
+    tracks); two free-text `rights` keys flagged as data errors. Checked
+    2026-10-06 against all 1.24B `track_active` rows and every active
+    track's `rights`.
+
 ## `track_active.md`
 
 1. **`active` is always `'Y'` — stop filtering on it.** Every row checked on

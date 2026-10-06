@@ -102,7 +102,7 @@ promotes the useful ones into the dictionary or `prompt.py`.
 | Group | Tools |
 |---|---|
 | Knowledge | `get_data_dictionary`, `get_domain_knowledge`, `capture_finding` |
-| Discovery | `list_databases`, `list_tables`, `describe_table`, `count_rows` |
+| Discovery | `list_databases`, `list_tables`, `describe_table` |
 | Entity resolution | `resolve_label`, `resolve_client` |
 | SQL | `sql_db_query_checker`, `sql_db_query` |
 | UX | `visualize_results`, `note_default_applied` |

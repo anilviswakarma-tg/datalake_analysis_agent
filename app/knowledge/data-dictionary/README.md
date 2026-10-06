@@ -25,6 +25,12 @@ Plain-language reference for anyone (human or AI agent) querying these tables. S
 
 **Out of scope:** `label_streams`, `daily_catalog_status_snapshot_v2` — single-purpose reporting-pipeline outputs, not general-purpose tables. Pipeline-only tables (`webhooklog`, `live_radio_cf_log`, `owners_groups`, etc.) are also out of scope.
 
+## Editing this dictionary
+
+Not sent to the agent: it receives this file from Shared vocabulary on.
+
+**Describe data only — no ingestion job/class names, trigger/workflow names, or code paths.** Don't reference job/class names (e.g. `PlayActivityCsvInsert`), Glue trigger/workflow names (e.g. `on_montly_reports_start`), or source file paths (e.g. `adhoc/manual_playactivity_upsert/`) — implementation detail belongs in code/commit history, not here. If an implementation fact is the *evidence* for a data-behavior claim (e.g. a refresh cadence), keep the claim and drop the specific identifier that backs it.
+
 ## Shared vocabulary
 
 | Concept | Definition |
@@ -36,6 +42,32 @@ Plain-language reference for anyone (human or AI agent) querying these tables. S
 | `disambiguation_id` | Cluster ID in `disambiguation_v1`. |
 | `sub_sku` | = `package_cost.cost_id`. Resolve name via `subscriptions_meta`. |
 
+## The central catalogue and a store's data
+
+Two different things are both called "the catalogue":
+
+| | Central catalogue | A store's catalogue |
+|---|---|---|
+| What | Everything Tuned Global has ingested from labels, whoever sells it | What one store actually carries |
+| Table | `mastermusic` (one row per track or album) | `track_active` (one row per track **per country** per store) |
+| Keys | `id`, `owner_id` (the label) | `group_id` (the store), `track_id`, `country` |
+| "Rights" means | `mastermusic.rights`: what the label granted, catalogue-wide | The countries the store carries the track in: `track_active.country` |
+
+- **Store = client = group = platform:** one of Tuned Global's customers,
+  e.g. Etisalat (`ETEG`), Spafax Lufthansa (`SPLH`). Always identified by
+  `group_id`; `groups` lists them.
+- **Any table with a `group_id` column holds store (client) data:**
+  `track_active`, `music_streams_v3`, `music_fetches`, `playactivity_v2`,
+  `users`, `subscriptions`, `subscriptions_meta`, `playlists`,
+  `radiostations`, `devices`, `user_devices`, `musicowners_groups`, and
+  `groups` (the list of stores itself).
+  **A table without one is central, shared by every store:** `mastermusic`,
+  `musicowners`, `disambiguation_v1`. A question that names a store needs a
+  table with `group_id`.
+- **A store carries a track per country (ISO code) or worldwide (`WW`):** a
+  country question is `country IN ('<code>', 'WW')`, and tracks are counted
+  with `COUNT(DISTINCT track_id)`. See [track_active.md](track_active.md).
+
 ## Rules that apply across every table here
 
 **Resolve business names to IDs before querying — fail if unresolved.** No table is keyed on a business name. Look it up (`groups.name` → `group_id`, `musicowners.name` → `owner_id`, `subscriptions_meta.sub_name` → `sub_sku`); if it doesn't resolve to exactly one row, stop and ask — don't guess or fuzzy-match.
@@ -45,5 +77,3 @@ Plain-language reference for anyone (human or AI agent) querying these tables. S
 **Store-scoped questions must join to a store-identifying table.** Most catalogue tables — `mastermusic` above all — are central and carry no store dimension; filtering them by `owner_id`, rights or status answers "what exists", not "what does this store have". Route any "what can store X stream/carry/see" question through `track_active` (or another table holding `group_id`) and count the intersection. Two plausible-looking totals are not evidence of overlap — join and measure it.
 
 **Use resolved silver lookup tables, not their raw key-value sources.** E.g. `subscriptions_meta`, not `package_cost_text` directly — the latter is multi-row per ID (one per language) and fans out silently on a naive join.
-
-**Describe data only — no ingestion job/class names, trigger/workflow names, or code paths.** Don't reference job/class names (e.g. `PlayActivityCsvInsert`), Glue trigger/workflow names (e.g. `on_montly_reports_start`), or source file paths (e.g. `adhoc/manual_playactivity_upsert/`) — implementation detail belongs in code/commit history, not here. If an implementation fact is the *evidence* for a data-behavior claim (e.g. a refresh cadence), keep the claim and drop the specific identifier that backs it.

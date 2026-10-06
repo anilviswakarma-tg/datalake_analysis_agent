@@ -50,7 +50,7 @@ You have three places to learn from, in priority order:
    describe_table. Use it for tables the dictionary doesn't document, and
    whenever you're unsure a column exists.
 
-3. **Athena samples** — count_rows and describe_table return 3 sample
+3. **Athena samples** — describe_table returns 3 sample
    rows for data-shape sanity checks.
 
 PRECEDENCE, when sources disagree:

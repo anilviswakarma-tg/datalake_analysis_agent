@@ -229,48 +229,6 @@ def describe_table(database: str, table: str) -> str:
     return "\n\n".join(out_parts)
 
 
-@tool
-def count_rows(database: str, table: str, where_clause: str = "") -> str:
-    """Quick row count for a table (with optional WHERE). Useful as a sanity
-    check before writing a complex query.
-
-    Args:
-      database: e.g. 'tg-deltalake-bronze'
-      table: table name
-      where_clause: optional WHERE clause WITHOUT the 'WHERE' keyword
-        (e.g. "status = 1 AND dw_stock_type = 'track'")
-    """
-    db = database.strip().strip('"')
-    tbl = table.strip().strip('"')
-    where_clause = where_clause.strip()
-
-    sql = f'SELECT COUNT(*) AS row_count FROM "{db}"."{tbl}"'
-    if where_clause:
-        sql += f"\nWHERE {where_clause}"
-
-    # The same guards as sql_db_query: without them a failing count was
-    # retried 36 times in one question (2026-10-06).
-    blocked = check_query_allowed(sql)
-    if blocked:
-        _record("count_rows", "\U0001f6d1 blocked: " + blocked.split(" - ")[0].split("\n")[0])
-        return blocked
-    if not current_run().execute_live:
-        _record("count_rows", "⏭️ skipped (live off)")
-        return "EXECUTION SKIPPED: 'Execute against Athena' toggled off."
-    if over := _over_scan_budget("count_rows"):
-        return over
-
-    try:
-        record_query(sql)
-        df = tracked_query(sql, "count_rows", database=db, limit_rows=1)
-        count = df.iloc[0, 0] if len(df) > 0 else 0
-        _record("count_rows", f"🔢 {db}.{tbl} → {count:,}")
-        return f"Row count: {count:,}"
-    except (BotoCoreError, ClientError, RuntimeError, TimeoutError) as e:
-        _record("count_rows", f"❌ {e}")
-        return _athena_error(str(e))
-
-
 # ---- Entity resolution tools ----
 
 @tool

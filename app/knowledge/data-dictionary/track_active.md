@@ -13,7 +13,7 @@ Records which tracks are currently active for which store — `(track_id, group_
 | `id` | Row key |
 | `group_id` | Identifies the store/client |
 | `track_id` | FK → `mastermusic.id` |
-| `country` | Country the row applies to |
+| `country` | Country the row applies to: an upper-case ISO 3166 two-letter code (`CH` = Switzerland, `DE` = Germany, `AE` = United Arab Emirates), or `WW` = worldwide; also `AN` (Netherlands Antilles, a retired code) and `XK` (Kosovo). Never null or lower case (all 1.24B rows checked 2026-10-06). **A worldwide track has only its `WW` row**, never per-country rows (true of every one of 28.9M `WW` tracks across 49 stores), so a country question must include it: `country IN ('AE', 'WW')`. A track has one row per country: count tracks with `COUNT(DISTINCT track_id)` (SPLH: 693,602 rows, 261,205 tracks). |
 | `active` | Always `'Y'` — a track that isn't active for a store has no row. Checked 2026-09-26: all 1,244,031,758 rows across 61 groups. **Don't filter on it**; it removes nothing and only lengthens the query |
 | `allow_stream` / `allow_sale` | Per-track permission flags for this store |
 | `date_updated` | Last update timestamp |
@@ -58,7 +58,7 @@ WHERE ta.group_id = '<group>'
   AND ta.allow_stream = 'Y'
 ```
 
-Add `ta.country` when the question is territory-specific — a track can be active in one country and not another, so an unqualified count is the union across territories and will exceed any single country's figure.
+Add `ta.country IN ('<code>', 'WW')` when the question is territory-specific — a track can be active in one country and not another, so an unqualified count is the union across territories and will exceed any single country's figure. Keep `'WW'`: a worldwide track has no per-country row.
 
 **Do not additionally filter on `mastermusic.rights`.** That map holds the rights available on the track itself, catalogue-wide — a different thing from what a store carries, already accounted for in these rows. Layering it on top changes results by a fraction of a percent and can only mislead. See [mastermusic.md](mastermusic.md).
 
@@ -76,6 +76,8 @@ WHERE ta.group_id = <group_id>
 If the question is just "which owners are assigned to this group" (not track-level detail), use `musicowners_groups` directly instead — see [musicowners.md](musicowners.md).
 
 ## Comparing a store's territories across releases of the same ISRC
+
+*For a store with `WW` rows, a release carried worldwide shows as `WW`; treat it as every country rather than reporting the others as missing.*
 
 "Rights on store" for a track means **the countries it is active in for that
 store**: its `country` values here, as a set. It is **not**
