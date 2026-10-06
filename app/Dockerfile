@@ -6,15 +6,12 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app code + knowledge files
+# Copy app code + knowledge files (.dockerignore keeps secrets and local state out)
 COPY . .
 
-# Streamlit port
-EXPOSE 8501
+# Chainlit, which replaced the Streamlit app (app.py). docker-compose.yml
+# publishes it on the host's 8501, the address users already have.
+EXPOSE 8000
 
-# Streamlit must listen on 0.0.0.0 so Docker/EC2 can reach it
-CMD ["streamlit", "run", "app.py", \
-     "--server.address=0.0.0.0", \
-     "--server.port=8501", \
-     "--server.headless=true", \
-     "--browser.gatherUsageStats=false"]
+# Must listen on 0.0.0.0 so Docker/EC2 can reach it
+CMD ["chainlit", "run", "chainlit_app.py", "--host", "0.0.0.0", "--port", "8000", "--headless"]

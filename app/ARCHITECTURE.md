@@ -1,9 +1,9 @@
 # Architecture
 
 An app that turns plain-English questions into AWS Athena SQL, runs them, and
-shows the results. Two UIs share everything below them: `chainlit_app.py`
-(`chainlit run chainlit_app.py`), which is replacing `app.py`
-(`streamlit run app.py`).
+shows the results. The app is `chainlit_app.py` (`chainlit run
+chainlit_app.py`), which replaced the Streamlit app, `app.py`. The Streamlit
+code still runs locally (`streamlit run app.py`) but is no longer deployed.
 
 ## Modules
 
@@ -126,8 +126,9 @@ Chainlit. The module split above is what keeps that migration bounded: only
 
 ## Deployment
 
-Unchanged by the module split: the Dockerfile copies the whole directory and
-runs `streamlit run app.py`; the release tarball ships the whole directory.
+The Dockerfile copies the directory (less what `.dockerignore` keeps out:
+`.env`, `.venv/`, `data/`, tests) and runs `chainlit run chainlit_app.py`;
+the release tarball ships the whole directory. See [DEPLOY.md](DEPLOY.md).
 There is no packaging step and no install.
 
 Two exclusions to remember:

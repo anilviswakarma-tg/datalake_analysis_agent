@@ -216,10 +216,11 @@ Answers to the checks above:
   sweep runs at startup and daily. The model is sent the last 25 exchanges
   of a chat (`MAX_HISTORY`).
 
-Remaining before Streamlit can be removed: make Chainlit the `Dockerfile`
-default (`docker-compose.yml` now runs both, Chainlit on 8000 with the
-`data/` volume), and restrict `allow_origins` in `.chainlit/config.toml` to
-the real host.
+Switched over (2026-10-06): the image now runs Chainlit, in place of the
+Streamlit app at the same address (host port 8501). Remaining: restrict
+`allow_origins` in `.chainlit/config.toml` to that address, and remove the
+Streamlit code (`app.py`, `ui.py`, `auth.py`) when the project moves to the
+deployment repo.
 
 **Incident 2026-10-05: repeated identical Athena queries.** On `primary`,
 the deployed (Streamlit) agent ran one SPLH rights query 64 times
@@ -260,10 +261,11 @@ server's proxy/load balancer idle timeout too.
 
 **Usage tiers (2026-10-05): capped and uncapped, caps not enforced yet.**
 Every user is capped unless `user_tiers` marks them uncapped. There is no
-admin screen; to change one:
+admin screen; to change one (works on either store):
 
 ```bash
-python -c "import asyncio, chat_store; asyncio.run(chat_store.set_user_tier(chat_store.chat_db_url(), 'someone@tunedglobal.com', 'uncapped'))"
+python -c "import asyncio, storage; asyncio.run(storage.store_from_env().set_user_tier('someone@tunedglobal.com', 'uncapped'))"
+# on the server: docker compose exec datalake-agent python -c "..."
 ```
 
 **TODO: enforce a monthly spend cap for capped users.** The concern is what

@@ -1,0 +1,26 @@
+# Kept out of the image built by the Dockerfile's `COPY . .`.
+
+# Secrets: the server's .env is passed to the container at run time
+# (docker-compose env_file), never baked into the image.
+.env
+*.env
+!.env.example
+.streamlit/secrets.toml
+
+# Local environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# State that lives outside the image: chat history (SQLite) and Chainlit's
+# upload scratch space. knowledge/ is copied in as a starting point; on the
+# server the knowledge/ volume replaces it.
+data/
+.files/
+
+# Not needed to run the app
+tests/
+requirements-dev.txt

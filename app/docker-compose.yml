@@ -1,37 +1,22 @@
 version: "3.9"
 
 services:
+  # The agent: the Chainlit app, which replaced the Streamlit one. Same
+  # service and container name as before, and published on the host's 8501,
+  # so the address users have and the security group don't change.
   datalake-agent:
     build: .
     image: datalake-agent:latest
     container_name: datalake-agent
     ports:
-      - "8501:8501"
+      - "8501:8000"
     env_file:
       - .env
     volumes:
       # Knowledge files persist across rebuilds
       - ./knowledge:/app/knowledge
-      # Streamlit config — edits take effect on container restart (no rebuild)
-      - ./.streamlit:/app/.streamlit
-    restart: unless-stopped
-
-  # The Chainlit UI (ROADMAP phase 2), run from the same image alongside the
-  # Streamlit service above until that is retired.
-  datalake-agent-chainlit:
-    image: datalake-agent:latest
-    container_name: datalake-agent-chainlit
-    depends_on:
-      - datalake-agent        # builds the shared image
-    command: ["chainlit", "run", "chainlit_app.py", "--host", "0.0.0.0",
-              "--port", "8000", "--headless"]
-    ports:
-      - "8000:8000"
-    env_file:
-      - .env
-    volumes:
-      - ./knowledge:/app/knowledge
-      # Chat history (SQLite) - must survive container rebuilds and deploys.
+      # Chat history, only when it is on SQLite (CHAT_STORE=sql). DynamoDB,
+      # the production store, keeps nothing on the instance.
       - ./data:/app/data
     restart: unless-stopped
 

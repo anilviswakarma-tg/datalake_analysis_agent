@@ -5,19 +5,20 @@ How the agent is deployed and run on EC2. For how the code is laid out, see
 
 ## What runs
 
-One Docker image, two services, on one EC2 instance (Amazon Linux 2023,
+One Docker image, one service, on one EC2 instance (Amazon Linux 2023,
 Docker Compose):
 
-| Service | Port | UI | State |
-|---|---|---|---|
-| `datalake-agent` | 8501 | Streamlit (the original app) | Deployed currently |
-| `datalake-agent-chainlit` | 8000 | Chainlit (the replacement) | **Not deployed yet** |
+| Service | Host port | App |
+|---|---|---|
+| `datalake-agent` | 8501 | Chainlit (`chainlit_app.py`, port 8000 in the container) |
 
-Both run the same agent code, so a deploy updates both. The image's default
-command is still Streamlit; `docker-compose.yml` starts Chainlit from the same
-image with its own command. The `chat-db` service in `docker-compose.yml` is
-a local development database only (profile `local-db`), and never starts on
-a server.
+**The Chainlit app replaces the Streamlit one.** Same service and container
+name, and the same host port, 8501, so users' address and the security group
+don't change. The Streamlit code (`app.py`, `ui.py`, `auth.py`) is still in
+the repo but no longer run; it goes when the project moves to the deployment
+repo. The `chat-db` (Postgres) and `chat-dynamodb`
+(DynamoDB Local) services in `docker-compose.yml` are for local development
+only (profile `local-db`), and never start on a server.
 
 State that lives outside the image:
 
@@ -31,25 +32,28 @@ State that lives outside the image:
 
 ## Before the first Chainlit deploy
 
-### Decisions still open
+### Decided
 
-| Decision | Options | Notes |
-|---|---|---|
-| Database | DynamoDB (`CHAT_STORE=dynamodb`, the team's choice, 1.6), SQLite on the `data/` volume, or RDS PostgreSQL | The team doesn't want RDS, so DynamoDB is built. The SQL store stays (`CHAT_STORE=sql`) in case RDS is revisited. Nothing needs migrating: nothing has been deployed with history |
-| Sign-in | Shared password only, or Google SSO as well | Google only accepts `http://` redirects for `localhost`, so SSO needs HTTPS (see step 1.4). Unverified against our OAuth client. Over plain HTTP the shared password travels unencrypted |
-| Streamlit | Keep it on 8501 alongside Chainlit, or switch over | Switching means making Chainlit the `Dockerfile` default and removing the Streamlit service |
+- **Database: DynamoDB** (`CHAT_STORE=dynamodb`, section 1.6). The team
+  doesn't want to run RDS. The SQL store is kept and selectable
+  (`CHAT_STORE=sql`) in case RDS is revisited. Nothing needs migrating:
+  nothing has been deployed with history.
+- **Chainlit replaces Streamlit,** at the same address (above).
+- **Sign-in: the same as the Streamlit app.** It used Google SSO when
+  `.streamlit/secrets.toml` on the server had a Google client, and the
+  shared password otherwise. Chainlit does the same from `.env`: Google SSO
+  when `OAUTH_GOOGLE_CLIENT_ID` is set, and the password (`APP_PASSWORD`)
+  either way. See section 2.
 
 ### Changes needed in the repo
 
-- [ ] **Add a `.dockerignore`.** There is none, and the `Dockerfile` does
-  `COPY . .`, so building on the server copies `.env` (every key and
-  secret), `.venv/` and `data/` into the image. It needs at least: `.env`,
-  `*.env`, `.venv/`, `data/`, `__pycache__/`, `.pytest_cache/`, `.files/`.
+- [x] **`.dockerignore`** keeps `.env`, `.venv/`, `data/` and the tests out
+  of the image.
 - [ ] **Restrict `allow_origins`** in `.chainlit/config.toml` from `["*"]` to
-  the app's real address, once known.
-- [ ] **Check `remote_deploy.sh` skips `data/`** as well as `knowledge/`, so
-  a deploy can never overwrite the SQLite history. The script lives with the
-  CI setup, not in this repo; not checked here.
+  the address users open (the Streamlit app's), once confirmed.
+- [ ] **Only if history ever runs on SQLite:** check `remote_deploy.sh` skips
+  `data/` as well as `knowledge/`, so a deploy can't overwrite it. Not
+  needed on DynamoDB. The script lives with the CI setup, not in this repo.
 
 ---
 
@@ -69,9 +73,8 @@ State that lives outside the image:
 | Port | Source | For |
 |---|---|---|
 | 22 | Admin IPs | SSH |
-| 8501 | Internal range / VPN CIDR | Streamlit, while it runs |
-| 8000 | Internal range / VPN CIDR | Chainlit, without a load balancer |
-| 443 | Internal range / VPN CIDR | Chainlit, behind a load balancer (1.4) |
+| 8501 | Internal range / VPN CIDR | The app, as today |
+| 443 | Internal range / VPN CIDR | Only if a load balancer goes in front (1.4) |
 
 Never `0.0.0.0/0`.
 
@@ -96,25 +99,37 @@ The `datalake-agent` workgroup itself enforces the 50 GB per-query scan
 cutoff and its own results location. Don't run the agent in `primary`: it
 has no cutoff and is shared with the reporting pipelines.
 
-### 1.4 HTTPS (needed for Google SSO)
+### 1.4 HTTPS
 
-An Application Load Balancer with an ACM certificate and a DNS name,
-forwarding 443 to the instance on 8000. Chainlit uses a websocket; the
-ALB's default 60 s idle timeout is fine, as Socket.IO sends a heartbeat
-every 25 s. One instance, so no sticky sessions needed.
+Nothing new: the app is served exactly as the Streamlit app was. If that
+already sits behind a load balancer, keep it, forwarding to the instance on
+8501. Chainlit uses a websocket; an ALB's default 60 s idle timeout is fine,
+as Socket.IO sends a heartbeat every 25 s.
 
-### 1.5 Google OAuth client (if SSO)
+### 1.5 Google SSO (only if the Streamlit app used it)
 
-A Google Workspace OAuth client (web application) with redirect URI
-`https://<host>/auth/oauth/google/callback`. Only verified
-`@tunedglobal.com` accounts get in; others see Chainlit's sign-in error
-page.
+Check the server's `.streamlit/secrets.toml`: an `[auth]` section with a
+Google `client_id` means the Streamlit app signed people in with Google.
+If so, reuse that same Google OAuth client:
+
+- In Google Cloud console → Credentials → that client, **add** the redirect
+  URI `<the app's address>/auth/oauth/google/callback`. Leave Streamlit's
+  `…/oauth2callback` until the switch-over is done.
+- Copy its client id and secret into the server's `.env` as
+  `OAUTH_GOOGLE_CLIENT_ID` and `OAUTH_GOOGLE_CLIENT_SECRET`, and set
+  `CHAINLIT_URL` to the app's address (section 2).
+
+Only verified `@tunedglobal.com` accounts get in; others see Chainlit's
+sign-in error page. Without a Google client, sign-in is the shared password,
+as it was for Streamlit.
 
 ### 1.6 Database
 
-**DynamoDB (`CHAT_STORE=dynamodb`).** One table, created by whoever owns the
-account. On AWS the app only checks it exists, so the instance needs no
-`CreateTable` permission:
+**DynamoDB (`CHAT_STORE=dynamodb`).** One table, in the same region as
+`AWS_REGION` (`us-west-2`), created by whoever owns the account. On AWS the
+app only checks it exists, so the instance needs no `CreateTable`
+permission; if it's missing, Chainlit logs "DynamoDB table ... does not
+exist" at startup:
 
 ```
 Table   datalake-agent-chat     on-demand (PAY_PER_REQUEST), point-in-time recovery on
@@ -123,11 +138,15 @@ Index   UserThread              UserThreadPK (S, hash)  UserThreadSK (S, range) 
 TTL     expiresAt
 ```
 
-The definition is also `chat_store_dynamo.table_definition()`. The instance
-role needs, on the table and `index/*`: `GetItem`, `PutItem`, `UpdateItem`,
+The definition is also `chat_store_dynamo.table_definition()`; the name is
+the app's default on the server (local runs default to
+`test-datalake-agent-chat` instead), so the server needs no `DYNAMODB_TABLE`. The instance
+role needs, on `arn:aws:dynamodb:us-west-2:<account>:table/datalake-agent-chat`
+and `…/index/*`: `GetItem`, `PutItem`, `UpdateItem`,
 `DeleteItem`, `Query`, `BatchGetItem`, `BatchWriteItem`, `DescribeTable`.
 Retention is TTL: a chat's items expire `CHAT_RETENTION_DAYS` after its last
-question or opening; favourites never expire.
+question or opening; favourites never expire. Point-in-time recovery is the
+backup.
 
 **SQL (`CHAT_STORE=sql`),** kept for if RDS is revisited: RDS PostgreSQL in
 the production account, reachable from the instance. Create an empty
@@ -148,13 +167,13 @@ Start from `.env.example`. The settings that matter on a server:
 | `ATHENA_OUTPUT_S3` | `s3://tg-temp-data/athena-results/datalake-agent/` | |
 | `CHAINLIT_AUTH_SECRET` | from `chainlit create-secret` | Required. Changing it signs everyone out |
 | `APP_PASSWORD` | a strong shared password | Plus a `@tunedglobal.com` email to sign in |
-| `CHAINLIT_URL` | `https://<host>` | Needed behind a load balancer, for the OAuth redirect |
-| `OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | from 1.5 | Leave empty for password-only |
+| `CHAINLIT_URL` | the app's address, e.g. `https://<host>` | Needed for Google SSO's redirect (1.5) |
+| `OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | the Streamlit app's Google client (1.5) | Leave empty if it used the password only |
 | `CHAT_STORE` | `dynamodb` | `sql` (the default) uses `CHAT_DB_URL` instead; `off` disables history |
-| `DYNAMODB_TABLE` | `datalake-agent-chat` (default) | The table from 1.6 |
+| `DYNAMODB_TABLE` | leave unset | Inside the server's container the app uses `datalake-agent-chat`, the table from 1.6. Anywhere else it defaults to `test-datalake-agent-chat`, so local runs can't reach production by accident |
 | `USAGE_RETENTION_DAYS` | `0` (default: keep) | Athena usage rows on DynamoDB; e.g. `400` for 13 months |
 | `CHAT_DB_URL` | only with `CHAT_STORE=sql`: empty (SQLite) or `postgresql+asyncpg://user:pass@host:5432/db?ssl=require` | `off` disables history |
-| `CHAT_RETENTION_DAYS` | `60` (default) | Non-favourite chats idle this long are deleted daily; `0` keeps everything |
+| `CHAT_RETENTION_DAYS` | `60` (default) | Non-favourite chats are deleted this long after they were last asked or opened (DynamoDB TTL; on SQL, a daily sweep by last message). `0` keeps everything |
 | `FAVOURITES_MAX` | `20` (default) | Favourite chats per user; favourites are never deleted, so this bounds them. `0` = no cap |
 | `CHAT_MAX_QUESTIONS` | `25` (default) | Questions per chat, then the user starts a new one. Matches the 25 past exchanges the model is sent. `0` = no cap |
 | `ATHENA_SESSION_SCAN_BUDGET_GB` | `50` (default) | Per chat; the user is asked before going over |
@@ -177,7 +196,7 @@ nano .env               # section 2
 docker compose up -d --build
 ```
 
-`ec2-setup.sh` prints the Streamlit address (8501); Chainlit is on 8000.
+`ec2-setup.sh` prints the app's address, on 8501.
 
 ---
 
@@ -213,9 +232,10 @@ the agent captured there.
 
 ```bash
 docker compose ps                                                  # both services Up
-docker compose exec datalake-agent-chainlit printenv ATHENA_WORKGROUP    # datalake-agent
-curl -s http://localhost:8000/health                               # Chainlit is serving
-docker compose logs --tail 50 datalake-agent-chainlit              # no errors at startup
+docker compose exec datalake-agent printenv ATHENA_WORKGROUP    # datalake-agent
+docker compose exec datalake-agent printenv CHAT_STORE          # dynamodb
+curl -s http://localhost:8501/health                            # the app is serving
+docker compose logs --tail 50 datalake-agent                    # no errors, none about the table
 ```
 
 Then in a browser:
@@ -232,14 +252,14 @@ Then in a browser:
 
 | Task | Command |
 |---|---|
-| Logs | `docker compose logs -f datalake-agent-chainlit` (or `datalake-agent`) |
+| Logs | `docker compose logs -f datalake-agent` |
 | Restart | `docker compose restart` |
 | Stop | `docker compose down` |
 | Rebuild after a code change | `docker compose up -d --build` |
 | Read the agent's findings | `cat knowledge/feedback.md`, or `/view-feedback` in Chainlit's dev mode |
-| Make a user uncapped | see "Usage tiers" in [ROADMAP.md](ROADMAP.md) |
+| Make a user uncapped | `docker compose exec datalake-agent python -c "import asyncio, storage; asyncio.run(storage.store_from_env().set_user_tier('someone@tunedglobal.com', 'uncapped'))"` |
 
-Back up `data/` while history is on SQLite; RDS has its own backups.
+Backups: DynamoDB's point-in-time recovery (1.6). On SQL: back up `data/` for SQLite; RDS has its own.
 
 ## How sign-in and sessions behave
 
