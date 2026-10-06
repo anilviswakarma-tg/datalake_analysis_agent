@@ -319,3 +319,32 @@ def test_hiding_empty_date_groups_cannot_hide_the_whole_sidebar():
     from config import SCRIPT_DIR
     js = (SCRIPT_DIR / "public" / "app.js").read_text(encoding="utf-8")
     assert "'#thread-history [data-sidebar=\"group\"]:has(" in js
+
+
+@pytest.mark.parametrize("value,cap", [(None, 25), ("10", 10), ("0", 0), ("-3", 0), ("x", 25)])
+def test_chat_length_cap_setting(monkeypatch, value, cap):
+    import chat_store
+    if value is None:
+        monkeypatch.delenv("CHAT_MAX_QUESTIONS", raising=False)
+    else:
+        monkeypatch.setenv("CHAT_MAX_QUESTIONS", value)
+    assert chat_store.chat_max_questions() == cap
+
+
+@pytest.mark.parametrize("answered,cap,full", [(24, "25", False), (25, "25", True),
+                                                (30, "25", True), (500, "0", False)])
+def test_a_chat_is_full_at_its_question_cap(cl_app, monkeypatch, answered, cap, full):
+    """Bounds every chat's size; 25 matches MAX_HISTORY, so the model always
+    sees the whole chat."""
+    from types import SimpleNamespace
+    monkeypatch.setenv("CHAT_MAX_QUESTIONS", cap)
+    history = [{"question": "q", "answer": "a"}] * answered
+    monkeypatch.setattr(cl_app.cl, "user_session", SimpleNamespace(get=lambda k: history))
+    assert cl_app._chat_full() is full
+
+
+def test_a_full_chat_runs_nothing(cl_app):
+    src = inspect.getsource(cl_app._answer)
+    assert src.index("if _chat_full():") < src.index("start_run(")
+    assert "Start a new chat to keep going" in src
+    assert cl_app.MAX_HISTORY == 25     # the model sees the whole of a full chat

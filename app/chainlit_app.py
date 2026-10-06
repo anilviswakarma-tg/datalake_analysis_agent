@@ -484,6 +484,14 @@ def _preflight_problem(model_choice: str, execute_live: bool) -> Optional[str]:
     return None
 
 
+def _chat_full() -> bool:
+    """The chat has its maximum number of answered questions. Counted from
+    the session's history, which a reopened chat rebuilds from its saved
+    answers, so the count survives reconnects and reopening."""
+    limit = chat_store.chat_max_questions()
+    return bool(limit) and len(cl.user_session.get("history") or []) >= limit
+
+
 def _history_messages(question: str) -> List[Dict[str, str]]:
     messages: List[Dict[str, str]] = []
     for prev in (cl.user_session.get("history") or [])[-MAX_HISTORY:]:
@@ -707,6 +715,10 @@ async def _answer(message: cl.Message) -> Optional[cl.Message]:
     question = (message.content or "").strip()
     if not question:
         return
+    if _chat_full():
+        return await cl.Message(content=(
+            f"This chat has reached its limit of {chat_store.chat_max_questions()} "
+            "questions. Start a new chat to keep going.")).send()
 
     dev, live = _dev_mode(), _execute_live()
     model_choice = _selected_model(message)

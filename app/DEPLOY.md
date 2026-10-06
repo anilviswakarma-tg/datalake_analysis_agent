@@ -134,6 +134,7 @@ Start from `.env.example`. The settings that matter on a server:
 | `CHAT_DB_URL` | empty (SQLite) or `postgresql+asyncpg://user:pass@host:5432/db` | `off` disables history |
 | `CHAT_RETENTION_DAYS` | `60` (default) | Non-favourite chats idle this long are deleted daily; `0` keeps everything |
 | `FAVOURITES_MAX` | `20` (default) | Favourite chats per user; favourites are never deleted, so this bounds them. `0` = no cap |
+| `CHAT_MAX_QUESTIONS` | `25` (default) | Questions per chat, then the user starts a new one. Matches the 25 past exchanges the model is sent. `0` = no cap |
 | `ATHENA_SESSION_SCAN_BUDGET_GB` | `50` (default) | Per chat; the user is asked before going over |
 | `DOWNLOAD_MAX_MB` | `100` (default) | Larger results get no download |
 | `OPENAI_API_KEY`, `GEMINI_API_KEY` | optional | Only for those entries in the model picker; GLM-5 needs none |

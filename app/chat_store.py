@@ -257,6 +257,16 @@ def favourites_max() -> int:
         return 20
 
 
+def chat_max_questions() -> int:
+    """Most questions one chat may hold (CHAT_MAX_QUESTIONS, default 25; 0 =
+    no cap). Bounds every chat's size. 25 is also MAX_HISTORY in
+    chainlit_app, so the model always sees a whole chat."""
+    try:
+        return max(0, int(os.getenv("CHAT_MAX_QUESTIONS", "25")))
+    except ValueError:
+        return 25
+
+
 class FavouriteLimitReached(Exception):
     def __init__(self, limit: int):
         super().__init__(f"favourite limit of {limit} reached")

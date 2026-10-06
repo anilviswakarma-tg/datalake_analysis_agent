@@ -201,7 +201,9 @@ Answers to the checks above:
   (the title bar's Favourite button or the chat's ⋯ menu); favourites show a
   star in the chat list. Favourites are never deleted, so they are capped
   at 20 per user (`FAVOURITES_MAX`, 2026-10-06); past that, the page says
-  to remove one first. The
+  to remove one first. Chats are capped at 25 questions
+  (`CHAT_MAX_QUESTIONS`, 2026-10-06), the same as `MAX_HISTORY`, so a chat's
+  size is bounded and the model always sees all of it. The
   sweep runs at startup and daily. The model is sent the last 25 exchanges
   of a chat (`MAX_HISTORY`).
 
