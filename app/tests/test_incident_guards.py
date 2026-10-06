@@ -167,3 +167,29 @@ def test_users_are_told_when_a_result_is_reused(athena):
     athena(reused=True)
     _, ctx = _ask(run_state.SessionLedger())
     assert any("Cached result" in n and "up to 120 minutes" in n for n in ctx.notices)
+
+
+def test_count_rows_has_the_same_guards(athena):
+    """count_rows bypassed every guard: one question retried a failing count
+    36 times (ETEG video streams, 2026-10-06)."""
+    fake = athena()
+    ctx = run_state.start_run(session=run_state.SessionLedger())
+    where = "group_id = 'ETEG' AND dw_reported_date >= '2026-09-01'"
+    tools.count_rows.func("tg-deltalake-silver", "music_streams_v3", where)
+    again = tools.count_rows.func("tg-deltalake-silver", "music_streams_v3", where)
+    assert again.startswith("DUPLICATE QUERY") and len(fake.started) == 1
+
+
+def test_count_rows_respects_the_chat_scan_budget(athena, monkeypatch):
+    monkeypatch.setenv("ATHENA_SESSION_SCAN_BUDGET_GB", "1")
+    fake = athena()
+    ledger = run_state.SessionLedger()
+    ledger.bytes_scanned = 2 * GB
+    run_state.start_run(session=ledger)
+    assert tools.count_rows.func("db", "t").startswith("SCAN BUDGET REACHED")
+    assert fake.started == []
+
+
+def test_a_date_compared_with_text_gets_the_fix():
+    msg = tools._athena_error("TYPE_MISMATCH: line 2:46: Cannot apply operator: date <= varchar(10)")
+    assert "DATE '2026-09-01'" in msg

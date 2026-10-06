@@ -446,3 +446,16 @@ def test_store_territories_come_from_track_active_not_rights():
     assert "array_agg(DISTINCT upper(country))" in section
     assert "al.id = mm.album_id" in section          # the UPC is on the album
     assert "mm.rights" not in section.split("```sql")[1]
+
+
+def test_the_agent_is_taught_to_find_video_streams():
+    """The agent filtered asset_type_id = 'video' (empty on every ETEG
+    stream) and compared the DATE partition with text (2026-10-06). Local
+    dictionary edits (UPSTREAM_PENDING items 10 and 11)."""
+    from config import DATA_DICT_DIR
+    streams = (DATA_DICT_DIR / "music_streams_v3.md").read_text(encoding="utf-8")
+    assert "## Streams by content type" in streams
+    assert "m.content_type" in streams and "DATE '2026-09-01'" in streams
+    assert "Never filter on it to find video" in streams
+    catalogue = (DATA_DICT_DIR / "mastermusic.md").read_text(encoding="utf-8")
+    assert "| `content_type` |" in catalogue

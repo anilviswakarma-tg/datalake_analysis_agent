@@ -3,7 +3,7 @@ entity resolution, SQL validation and execution, and UI affordances."""
 
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 import pandas as pd
 from botocore.exceptions import BotoCoreError, ClientError
@@ -248,14 +248,27 @@ def count_rows(database: str, table: str, where_clause: str = "") -> str:
     if where_clause:
         sql += f"\nWHERE {where_clause}"
 
+    # The same guards as sql_db_query: without them a failing count was
+    # retried 36 times in one question (2026-10-06).
+    blocked = check_query_allowed(sql)
+    if blocked:
+        _record("count_rows", "\U0001f6d1 blocked: " + blocked.split(" - ")[0].split("\n")[0])
+        return blocked
+    if not current_run().execute_live:
+        _record("count_rows", "⏭️ skipped (live off)")
+        return "EXECUTION SKIPPED: 'Execute against Athena' toggled off."
+    if over := _over_scan_budget("count_rows"):
+        return over
+
     try:
+        record_query(sql)
         df = tracked_query(sql, "count_rows", database=db, limit_rows=1)
         count = df.iloc[0, 0] if len(df) > 0 else 0
         _record("count_rows", f"🔢 {db}.{tbl} → {count:,}")
         return f"Row count: {count:,}"
     except (BotoCoreError, ClientError, RuntimeError, TimeoutError) as e:
         _record("count_rows", f"❌ {e}")
-        return f"Error: {e}"
+        return _athena_error(str(e))
 
 
 # ---- Entity resolution tools ----
@@ -376,6 +389,8 @@ common mistakes:
 - For mastermusic ingestion-date filters: use from_iso8601_timestamp(datetime_added)
 - For music_streams_v3 / playactivity_v2: dw_reported_date partition filter REQUIRED
 - For music_streams_v3 / playactivity_v2: group_id partition filter REQUIRED
+- music_streams_v3.dw_reported_date is a DATE: compare with DATE 'YYYY-MM-DD', never a bare string
+- Video vs audio: join stock_code_id to mastermusic.id and use mastermusic.content_type ('video', 'audio', 'karaoke', 'audiobook'), never asset_type_id
 - For playactivity_v2 (bronze) — standard stream filters MANDATORY:
     is_fetch = 'false'           (STRING — use 'false', not boolean false!)
     is_dupe_ex_guid = false      (BOOLEAN — use false, not 'false'!)
@@ -430,15 +445,8 @@ def sql_db_query(query: str) -> str:
     # (aws.RESULT_REUSE_MINUTES) returns an identical query's stored result
     # without scanning. What still needs stopping is scanning past the
     # chat's budget.
-    ledger = current_run().session
-    if ledger.over_budget():
-        _record("sql_db_query", "🛑 blocked: chat scan budget")
-        return (f"SCAN BUDGET REACHED - this chat has scanned "
-                f"{fmt_bytes(ledger.bytes_scanned)}, over its "
-                f"{fmt_bytes(ledger.allowance)} budget. Do not run more queries. "
-                "Tell the user what you found so far and that the chat's scan "
-                "budget is used up; they will be asked whether to continue when "
-                "they send their next message.")
+    if over := _over_scan_budget("sql_db_query"):
+        return over
 
     try:
         record_query(query)
@@ -467,6 +475,20 @@ def sql_db_query(query: str) -> str:
         return _athena_error(str(e))
 
 
+def _over_scan_budget(tool_name: str) -> Optional[str]:
+    """The refusal to hand back when the chat has scanned its budget, else None."""
+    ledger = current_run().session
+    if not ledger.over_budget():
+        return None
+    _record(tool_name, "🛑 blocked: chat scan budget")
+    return (f"SCAN BUDGET REACHED - this chat has scanned "
+            f"{fmt_bytes(ledger.bytes_scanned)}, over its "
+            f"{fmt_bytes(ledger.allowance)} budget. Do not run more queries. "
+            "Tell the user what you found so far and that the chat's scan "
+            "budget is used up; they will be asked whether to continue when "
+            "they send their next message.")
+
+
 def _athena_error(err: str) -> str:
     """The agent-facing message for a failed query, with a fix where the
     error is a recognisable one."""
@@ -481,6 +503,9 @@ def _athena_error(err: str) -> str:
         hint = "\nHINT: Use describe_table to confirm the exact column name."
     elif "Table" in err and ("not found" in err.lower() or "does not exist" in err.lower()):
         hint = "\nHINT: Use list_tables(db) to confirm the table exists."
+    elif "TYPE_MISMATCH" in err and "date" in err and "varchar" in err:
+        hint = ("\nHINT: a DATE column is being compared with text. dw_reported_date is "
+                "a DATE partition: write DATE '2026-09-01', not '2026-09-01'.")
     _record("sql_db_query", f"❌ {err[:120]}")
     return f"ATHENA ERROR: {err}{hint}"
 

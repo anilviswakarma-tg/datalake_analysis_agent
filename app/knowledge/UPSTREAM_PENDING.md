@@ -66,6 +66,20 @@ file when it is empty.
    between `ssdt` and `sedt`, and start dates run into the future. Written
    2026-09-30 after the agent, with the column undocumented, guessed `pk` and
    `track_id` and reported an existing product as not found.
+10. **`content_type` documented** as the way to tell audio, video, karaoke
+    and audiobook apart, preferred to the `is_*` flags; and the flags' "karaoke
+    implies `is_video`" claim marked contradicted (ETEG's September 2026
+    karaoke tracks all have `is_video = false`). Written 2026-10-06 with item 11.
+
+## `music_streams_v3.md`
+
+11. **Columns documented: `dw_reported_date` (a DATE partition: compare with
+    `DATE '...'` literals), `group_id`, `stock_code_id`, `asset_type_id` (not the
+    content type, and empty on every ETEG stream checked), `play_type`; plus a
+    new section "Streams by content type"** joining `stock_code_id` to
+    `mastermusic.content_type`. Written 2026-10-06 after the agent filtered
+    `asset_type_id = 'video'` for ETEG's September video streams, and retried a
+    string-vs-date comparison 36 times. Checked: 23,449 video streams.
 
 ## `playactivity.md`
 
