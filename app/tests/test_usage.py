@@ -201,7 +201,7 @@ def test_a_storage_failure_never_fails_the_answer(cl_app, monkeypatch, caplog):
     async def broken(*a, **k):
         raise RuntimeError("database is locked")
     monkeypatch.setattr(cl_app.chat_store, "record_usage", broken)
-    monkeypatch.setattr(cl_app, "CHAT_DB_URL", "sqlite+aiosqlite:///x.db")
+    monkeypatch.setattr(cl_app, "STORE", cl_app.storage.SqlStore("sqlite+aiosqlite:///x.db"))
     from types import SimpleNamespace
     monkeypatch.setattr(cl_app.cl, "context", SimpleNamespace(session=SimpleNamespace(thread_id="t")))
     asyncio.run(cl_app._save_usage("a@tunedglobal.com", [_scan(1)]))     # no exception
@@ -211,7 +211,7 @@ def test_a_storage_failure_never_fails_the_answer(cl_app, monkeypatch, caplog):
 def test_the_meter_gets_the_month_and_the_tier(cl_app, monkeypatch, db_url):
     from types import SimpleNamespace
     url = db_url
-    monkeypatch.setattr(cl_app, "CHAT_DB_URL", url)
+    monkeypatch.setattr(cl_app, "STORE", cl_app.storage.SqlStore(url))
 
     async def go():
         await chat_store.ensure_schema(url)

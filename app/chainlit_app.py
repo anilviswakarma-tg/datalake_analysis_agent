@@ -34,9 +34,9 @@ from fastapi.responses import JSONResponse
 
 import access
 import chat_store
+import storage
 from agent import build_agent
 from aws import RESULT_REUSE_MINUTES, _fetch_s3_csv, result_size_bytes
-from chainlit_data import build_data_layer
 from config import DATA_DICT_DIR, FEEDBACK_FILE, _openai_key_looks_real
 from entities import _ENTITY_CACHE
 from models import (_MODEL_REGISTRY, explain_failure, message_text,
@@ -112,10 +112,10 @@ if access.dev_bypass_requested():
 # ═══════════════════════════════════════════════════════════════════════════
 # CHAT HISTORY
 # ═══════════════════════════════════════════════════════════════════════════
-# Which database is chat_store's business (CHAT_DB_URL); nothing below knows
-# or cares whether it is SQLite or Postgres. CHAT_DB_URL=off disables history.
+# Where history lives is storage.py's business (CHAT_STORE: SQL by
+# CHAT_DB_URL, or DynamoDB); nothing below knows which. None = no history.
 
-CHAT_DB_URL = chat_store.chat_db_url()
+STORE = storage.store_from_env()
 
 RETENTION_SWEEP_SECONDS = 24 * 60 * 60
 
@@ -125,7 +125,7 @@ async def _retention_sweep() -> None:
     then daily. A failed sweep is logged and retried the next day."""
     while True:
         try:
-            removed = await chat_store.purge_expired(CHAT_DB_URL)
+            removed = await STORE.purge_expired()
             if removed:
                 log.info("chat retention: deleted %d non-favourite chats", removed)
         except Exception:
@@ -133,21 +133,22 @@ async def _retention_sweep() -> None:
         await asyncio.sleep(RETENTION_SWEEP_SECONDS)
 
 
-if CHAT_DB_URL:
+if STORE:
     @cl.on_app_startup
     async def create_history_schema():
-        await chat_store.ensure_schema(CHAT_DB_URL)
-        if chat_store.retention_days():
+        await STORE.ensure_schema()
+        # A store that expires chats itself (DynamoDB TTL) needs no sweep
+        if STORE.sweeps and chat_store.retention_days():
             asyncio.get_running_loop().create_task(_retention_sweep())
 
     @cl.data_layer
     def history_data_layer():
-        return build_data_layer(CHAT_DB_URL)
+        return STORE.data_layer()
 
     # Favourite chats, for public/app.js. POST only: Chainlit's catch-all page
     # route is GET, so a GET here would never be reached.
     async def _favourites_state(user: Any) -> JSONResponse:
-        chats = await chat_store.favourite_chats(CHAT_DB_URL, user.identifier)
+        chats = await STORE.favourite_chats(user.identifier)
         return JSONResponse({"favourites": chats,
                              "retention_days": chat_store.retention_days(),
                              "max_favourites": chat_store.favourites_max()})
@@ -162,8 +163,8 @@ if CHAT_DB_URL:
             raise HTTPException(status_code=401, detail="Unauthorized")
         await is_thread_author(current_user.identifier, thread_id)   # 401/404 otherwise
         try:
-            await chat_store.set_favourite(CHAT_DB_URL, thread_id, current_user.identifier,
-                                           bool(payload.get("favourite")))
+            await STORE.set_favourite(thread_id, current_user.identifier,
+                                      bool(payload.get("favourite")))
         except chat_store.FavouriteLimitReached as e:
             return JSONResponse(status_code=409, content={
                 "error": f"You can keep up to {e.limit} favourite chats. "
@@ -186,13 +187,28 @@ if CHAT_DB_URL:
 # today is the agent workgroup's per-query scan cutoff (ATHENA_WORKGROUP).
 
 
+def _touch_chat(thread_id: Optional[str]) -> None:
+    """The chat was asked or opened, so it stays for another retention
+    period. In the background: on DynamoDB it rewrites each of the chat's
+    items' expiry, which no one should wait for. A no-op on SQL."""
+    if not (STORE and thread_id):
+        return
+
+    async def touch():
+        try:
+            await STORE.touch_chat(thread_id)
+        except Exception:
+            log.exception("could not refresh chat %s's expiry", thread_id)
+    asyncio.get_running_loop().create_task(touch())
+
+
 async def _save_usage(user_key: Optional[str], scans: List[Dict[str, Any]]) -> None:
     """Never lets a storage problem turn into a failed answer."""
-    if not (CHAT_DB_URL and user_key and scans):
+    if not (STORE and user_key and scans):
         return
     try:
         thread_id = getattr(cl.context.session, "thread_id", None)
-        await chat_store.record_usage(CHAT_DB_URL, user_key, thread_id, scans)
+        await STORE.record_usage(user_key, thread_id, scans)
     except Exception:
         log.exception("could not record Athena usage")
 
@@ -201,13 +217,13 @@ async def usage_summary(current_user: UserParam):
     """This month's Athena usage and the user's tier, for the meter."""
     if not current_user:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    usage = await chat_store.month_usage(CHAT_DB_URL, current_user.identifier)
-    usage["tier"] = await chat_store.user_tier(CHAT_DB_URL, current_user.identifier)
+    usage = await STORE.month_usage(current_user.identifier)
+    usage["tier"] = await STORE.user_tier(current_user.identifier)
     usage["reuse_minutes"] = RESULT_REUSE_MINUTES
     return JSONResponse(usage)
 
 
-if CHAT_DB_URL:
+if STORE:
     # Without a database there is nowhere to keep usage; the page then shows
     # no meter (it gets a 404 here).
     cl_server.app.add_api_route(f"{cl_config.run.root_path or ''}/datalake/usage",
@@ -313,6 +329,7 @@ async def on_chat_resume(thread: Dict[str, Any]):
             history.append({"question": record["question"], "answer": record["answer"]})
             saved.append((step["id"], record.get("result")))
     await _start_session(history)
+    _touch_chat(thread.get("id"))
 
     for step_id, result in saved:
         df = chat_store.preview_dataframe(result)
@@ -705,6 +722,7 @@ async def on_message(message: cl.Message):
         sent = await _answer(message)
     finally:
         _reload_if_disconnected(socket_id, sent)
+        _touch_chat(cl.context.session.thread_id)
 
 
 async def _answer(message: cl.Message) -> Optional[cl.Message]:

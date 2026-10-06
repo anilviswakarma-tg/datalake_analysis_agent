@@ -25,7 +25,7 @@ State that lives outside the image:
 |---|---|---|
 | Server settings and secrets | `.env` on the instance | Excluded from git and from the image |
 | Data dictionary and the agent's findings | `knowledge/` on the instance, a volume | `remote_deploy.sh` skips it (see "Updating the knowledge files") |
-| Chat history, favourites, usage, tiers | The database in `CHAT_DB_URL`; unset = SQLite in `data/`, a volume | It's a volume, or an external database |
+| Chat history, favourites, usage, tiers | `CHAT_STORE=dynamodb`: the DynamoDB table. `CHAT_STORE=sql`: the database in `CHAT_DB_URL` (unset = SQLite in `data/`, a volume) | It's outside the instance, or a volume |
 
 ---
 
@@ -35,7 +35,7 @@ State that lives outside the image:
 
 | Decision | Options | Notes |
 |---|---|---|
-| Database | SQLite on the `data/` volume (the default, no setup), or RDS PostgreSQL | RDS is the plan (ROADMAP, "Postgres, locally"). Starting on SQLite is fine: nothing needs migrating yet, and switching later is a `CHAT_DB_URL` change, though chats saved on SQLite don't move across by themselves |
+| Database | DynamoDB (`CHAT_STORE=dynamodb`, the team's choice, 1.6), SQLite on the `data/` volume, or RDS PostgreSQL | The team doesn't want RDS, so DynamoDB is built. The SQL store stays (`CHAT_STORE=sql`) in case RDS is revisited. Nothing needs migrating: nothing has been deployed with history |
 | Sign-in | Shared password only, or Google SSO as well | Google only accepts `http://` redirects for `localhost`, so SSO needs HTTPS (see step 1.4). Unverified against our OAuth client. Over plain HTTP the shared password travels unencrypted |
 | Streamlit | Keep it on 8501 alongside Chainlit, or switch over | Switching means making Chainlit the `Dockerfile` default and removing the Streamlit service |
 
@@ -110,10 +110,29 @@ A Google Workspace OAuth client (web application) with redirect URI
 `@tunedglobal.com` accounts get in; others see Chainlit's sign-in error
 page.
 
-### 1.6 Database (if not SQLite)
+### 1.6 Database
 
-RDS PostgreSQL in the production account, reachable from the instance.
-Create an empty database and user; the app creates its tables on startup.
+**DynamoDB (`CHAT_STORE=dynamodb`).** One table, created by whoever owns the
+account. On AWS the app only checks it exists, so the instance needs no
+`CreateTable` permission:
+
+```
+Table   datalake-agent-chat     on-demand (PAY_PER_REQUEST), point-in-time recovery on
+Keys    PK (S, hash)            SK (S, range)
+Index   UserThread              UserThreadPK (S, hash)  UserThreadSK (S, range)  projection ALL
+TTL     expiresAt
+```
+
+The definition is also `chat_store_dynamo.table_definition()`. The instance
+role needs, on the table and `index/*`: `GetItem`, `PutItem`, `UpdateItem`,
+`DeleteItem`, `Query`, `BatchGetItem`, `BatchWriteItem`, `DescribeTable`.
+Retention is TTL: a chat's items expire `CHAT_RETENTION_DAYS` after its last
+question or opening; favourites never expire.
+
+**SQL (`CHAT_STORE=sql`),** kept for if RDS is revisited: RDS PostgreSQL in
+the production account, reachable from the instance. Create an empty
+database and a user that owns it; the app creates its tables on startup.
+`CHAT_DB_URL=postgresql+asyncpg://user:pass@host:5432/db?ssl=require`.
 
 ---
 
@@ -131,7 +150,10 @@ Start from `.env.example`. The settings that matter on a server:
 | `APP_PASSWORD` | a strong shared password | Plus a `@tunedglobal.com` email to sign in |
 | `CHAINLIT_URL` | `https://<host>` | Needed behind a load balancer, for the OAuth redirect |
 | `OAUTH_GOOGLE_CLIENT_ID` / `_SECRET` | from 1.5 | Leave empty for password-only |
-| `CHAT_DB_URL` | empty (SQLite) or `postgresql+asyncpg://user:pass@host:5432/db` | `off` disables history |
+| `CHAT_STORE` | `dynamodb` | `sql` (the default) uses `CHAT_DB_URL` instead; `off` disables history |
+| `DYNAMODB_TABLE` | `datalake-agent-chat` (default) | The table from 1.6 |
+| `USAGE_RETENTION_DAYS` | `0` (default: keep) | Athena usage rows on DynamoDB; e.g. `400` for 13 months |
+| `CHAT_DB_URL` | only with `CHAT_STORE=sql`: empty (SQLite) or `postgresql+asyncpg://user:pass@host:5432/db?ssl=require` | `off` disables history |
 | `CHAT_RETENTION_DAYS` | `60` (default) | Non-favourite chats idle this long are deleted daily; `0` keeps everything |
 | `FAVOURITES_MAX` | `20` (default) | Favourite chats per user; favourites are never deleted, so this bounds them. `0` = no cap |
 | `CHAT_MAX_QUESTIONS` | `25` (default) | Questions per chat, then the user starts a new one. Matches the 25 past exchanges the model is sent. `0` = no cap |

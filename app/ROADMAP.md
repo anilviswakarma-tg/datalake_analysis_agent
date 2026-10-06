@@ -184,9 +184,18 @@ Answers to the checks above:
   `.env.example`). Checked end to end: a conversation, favourite and usage
   survive a restart and a reopened chat keeps its table, chart, downloads and
   context. The database tests run on Postgres with `TEST_DATABASE_URL` set to the
-  separate `datalake_chat_test` database (they wipe it; see `tests/conftest.py`). **TODO: the production database** - most likely
-  RDS PostgreSQL in the prod account, reachable from the EC2 instance; then
-  set `CHAT_DB_URL` in the server's `.env`. Nothing to migrate: nothing has
+  separate `datalake_chat_test` database (they wipe it; see `tests/conftest.py`).
+- **DynamoDB, the production choice (2026-10-06).** The team doesn't want to
+  run RDS, so history can live in one DynamoDB table (`CHAT_STORE=dynamodb`;
+  design: [DynamoDB design](https://claude.ai/artifact/UWzXRj3s4dpu2BzgjVr5Pj)).
+  `storage.py` picks the store, so the SQL store above stays intact and
+  selectable (`CHAT_STORE=sql`) in case RDS is revisited. Retention is TTL,
+  refreshed on each question or opening; answer snapshots are stored
+  compressed for the 400 KB item limit. Checked end to end against DynamoDB
+  Local (`docker compose --profile local-db up -d chat-dynamodb`): a question
+  with its table and downloads, the usage meter, favouriting, and reopening
+  after a reload. **TODO: create the production table** (DEPLOY.md, 1.6) and
+  set `CHAT_STORE=dynamodb` on the server. Nothing to migrate: nothing has
   been deployed with history yet.
 - **Data layer: done, database-agnostic (2026-09-26).** SQLite on a Docker
   volume for now, selected by `CHAT_DB_URL`; moving to Postgres is a URL

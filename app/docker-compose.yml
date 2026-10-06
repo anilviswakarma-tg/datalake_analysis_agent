@@ -61,5 +61,26 @@ services:
       retries: 10
     restart: unless-stopped
 
+  # Local development DynamoDB, for CHAT_STORE=dynamodb (storage.py). Opt-in
+  # like chat-db above:
+  #   docker compose --profile local-db up -d chat-dynamodb
+  # then in .env:
+  #   CHAT_STORE=dynamodb
+  #   DYNAMODB_ENDPOINT_URL=http://localhost:8002
+  # The app creates its table here on first start. Tests can use it too:
+  #   TEST_DYNAMODB_ENDPOINT=http://localhost:8002
+  chat-dynamodb:
+    image: amazon/dynamodb-local:latest
+    container_name: datalake-chat-dynamodb
+    profiles: ["local-db"]
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/home/dynamodblocal/data"]
+    user: root                     # the image's user can't write a named volume
+    ports:
+      - "127.0.0.1:8002:8000"      # this machine only; 8000 is Chainlit
+    volumes:
+      - chat-dynamodb-data:/home/dynamodblocal/data
+    restart: unless-stopped
+
 volumes:
   chat-db-data:
+  chat-dynamodb-data:

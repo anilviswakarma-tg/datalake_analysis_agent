@@ -9,3 +9,4 @@
 # run the suite — `pytest` was missing from every manifest.
 
 pytest>=8.0.0
+moto[dynamodb]>=5.0       # in-process DynamoDB for tests/test_chat_store_dynamo.py

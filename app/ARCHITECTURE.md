@@ -29,6 +29,9 @@ rule is what keeps the graph acyclic, and `tests/test_wiring.py` enforces it.
 | `auth.py` | ~195 | Login screen, SSO/password paths, session expiry, dev bypass. |
 | `app.py` | ~360 | Streamlit page composition and run loop. Being retired. |
 | `chainlit_data.py` | ~75 | Chainlit's SQLAlchemy data layer, fixed to work on any backend. |
+| `storage.py` | ~110 | The adapter: picks where history lives (`CHAT_STORE`: `sql` or `dynamodb`) and gives the app one set of methods for either. The app never calls a backend directly. |
+| `chat_store_dynamo.py` | ~330 | The DynamoDB store: one table in Chainlit's key layout plus our favourites, usage and tiers; retention by TTL on `expiresAt`, refreshed on each use. |
+| `chainlit_data_dynamo.py` | ~170 | Chainlit's DynamoDB data layer, adapted: compressed answer snapshots (400 KB item limit), expiry on new items, expired chats hidden, keeps a chat's creation date and saved session. |
 | `chainlit_app.py` | ~440 | Chainlit auth callbacks, model picker, settings, streamed run, chat resume. Entry point. |
 
 **Browser layer (`public/`).** `app.js` and `app.css` redraw the Streamlit
